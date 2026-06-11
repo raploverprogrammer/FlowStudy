@@ -1,0 +1,712 @@
+[
+  {
+    "id": "foundation-calculus-00",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 0,
+    "title": "零基础",
+    "question_count": 16,
+    "verified_count": 0
+  },
+  {
+    "id": "foundation-calculus-01",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 1,
+    "title": "第1章函数极限与连续",
+    "question_count": 23,
+    "verified_count": 2
+  },
+  {
+    "id": "foundation-calculus-02",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 2,
+    "title": "第2章数列极限",
+    "question_count": 12,
+    "verified_count": 0
+  },
+  {
+    "id": "foundation-calculus-03",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 3,
+    "title": "第3章一元函数微分学的概念",
+    "question_count": 15,
+    "verified_count": 4
+  },
+  {
+    "id": "foundation-calculus-04",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 4,
+    "title": "第4章一元函数微分学的计算",
+    "question_count": 10,
+    "verified_count": 1
+  },
+  {
+    "id": "foundation-calculus-05",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 5,
+    "title": "第5章一元函数微分学的应用(一)——几何应用",
+    "question_count": 24,
+    "verified_count": 7
+  },
+  {
+    "id": "foundation-calculus-06",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 6,
+    "title": "第6章一元函数微分学的应用(二)——中值定理、微分等式与微分不等式",
+    "question_count": 22,
+    "verified_count": 5
+  },
+  {
+    "id": "foundation-calculus-07",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 7,
+    "title": "第7章一元函数微分学的应用(三)物理应用",
+    "question_count": 5,
+    "verified_count": 2
+  },
+  {
+    "id": "foundation-calculus-08",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 8,
+    "title": "第8章一元函数积分学的概念与性质",
+    "question_count": 25,
+    "verified_count": 2
+  },
+  {
+    "id": "foundation-calculus-09",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 9,
+    "title": "第9章一元函数积分学的计算",
+    "question_count": 27,
+    "verified_count": 2
+  },
+  {
+    "id": "foundation-calculus-10",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 10,
+    "title": "第10章一元函数积分学的应用(一)——几何应用",
+    "question_count": 19,
+    "verified_count": 0
+  },
+  {
+    "id": "foundation-calculus-11",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 11,
+    "title": "第11章一元函数积分学的应用(二)——积分等式与积分不等式",
+    "question_count": 8,
+    "verified_count": 1
+  },
+  {
+    "id": "foundation-calculus-12",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 12,
+    "title": "第12章一元函数积分学的应用(三彐—物理应用",
+    "question_count": 7,
+    "verified_count": 0
+  },
+  {
+    "id": "foundation-calculus-13",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 13,
+    "title": "第13章多元函数微分学",
+    "question_count": 24,
+    "verified_count": 1
+  },
+  {
+    "id": "foundation-calculus-14",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 14,
+    "title": "第14章二重积分",
+    "question_count": 24,
+    "verified_count": 1
+  },
+  {
+    "id": "foundation-calculus-15",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 15,
+    "title": "第15章微分方程",
+    "question_count": 20,
+    "verified_count": 7
+  },
+  {
+    "id": "foundation-calculus-16",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 16,
+    "title": "第16章无穷级数",
+    "question_count": 19,
+    "verified_count": 0
+  },
+  {
+    "id": "foundation-calculus-17",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 17,
+    "title": "第17章多元函数积分学的预备知识",
+    "question_count": 14,
+    "verified_count": 3
+  },
+  {
+    "id": "foundation-calculus-18",
+    "batch": 1,
+    "phase": "foundation",
+    "subject": "calculus",
+    "chapter_number": 18,
+    "title": "第18章多元函数积分学",
+    "question_count": 16,
+    "verified_count": 0
+  },
+  {
+    "id": "foundation-linear_algebra-01",
+    "batch": 2,
+    "phase": "foundation",
+    "subject": "linear_algebra",
+    "chapter_number": 1,
+    "title": "第1章行列式",
+    "question_count": 10,
+    "verified_count": 0
+  },
+  {
+    "id": "foundation-linear_algebra-02",
+    "batch": 2,
+    "phase": "foundation",
+    "subject": "linear_algebra",
+    "chapter_number": 2,
+    "title": "第2章矩阵",
+    "question_count": 19,
+    "verified_count": 2
+  },
+  {
+    "id": "foundation-linear_algebra-03",
+    "batch": 2,
+    "phase": "foundation",
+    "subject": "linear_algebra",
+    "chapter_number": 3,
+    "title": "第3章向量组",
+    "question_count": 12,
+    "verified_count": 1
+  },
+  {
+    "id": "foundation-linear_algebra-04",
+    "batch": 2,
+    "phase": "foundation",
+    "subject": "linear_algebra",
+    "chapter_number": 4,
+    "title": "第4章线性方程组",
+    "question_count": 17,
+    "verified_count": 2
+  },
+  {
+    "id": "foundation-linear_algebra-05",
+    "batch": 2,
+    "phase": "foundation",
+    "subject": "linear_algebra",
+    "chapter_number": 5,
+    "title": "第5章特征值与特征向量",
+    "question_count": 23,
+    "verified_count": 2
+  },
+  {
+    "id": "foundation-linear_algebra-06",
+    "batch": 2,
+    "phase": "foundation",
+    "subject": "linear_algebra",
+    "chapter_number": 6,
+    "title": "第6章二次型",
+    "question_count": 27,
+    "verified_count": 2
+  },
+  {
+    "id": "foundation-probability-01",
+    "batch": 3,
+    "phase": "foundation",
+    "subject": "probability",
+    "chapter_number": 1,
+    "title": "第1章随机事件与概率",
+    "question_count": 6,
+    "verified_count": 0
+  },
+  {
+    "id": "foundation-probability-02",
+    "batch": 3,
+    "phase": "foundation",
+    "subject": "probability",
+    "chapter_number": 2,
+    "title": "第2章一维随机变量及其分布",
+    "question_count": 6,
+    "verified_count": 2
+  },
+  {
+    "id": "foundation-probability-03",
+    "batch": 3,
+    "phase": "foundation",
+    "subject": "probability",
+    "chapter_number": 3,
+    "title": "第3章多维随机变量及其分布",
+    "question_count": 14,
+    "verified_count": 0
+  },
+  {
+    "id": "foundation-probability-04",
+    "batch": 3,
+    "phase": "foundation",
+    "subject": "probability",
+    "chapter_number": 4,
+    "title": "第4章随机变量的数字特征",
+    "question_count": 21,
+    "verified_count": 3
+  },
+  {
+    "id": "foundation-probability-05",
+    "batch": 3,
+    "phase": "foundation",
+    "subject": "probability",
+    "chapter_number": 5,
+    "title": "第5章大数定律与中心极限定理",
+    "question_count": 8,
+    "verified_count": 2
+  },
+  {
+    "id": "foundation-probability-06",
+    "batch": 3,
+    "phase": "foundation",
+    "subject": "probability",
+    "chapter_number": 6,
+    "title": "第6章数理统计",
+    "question_count": 24,
+    "verified_count": 2
+  },
+  {
+    "id": "enhancement-calculus-01",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 1,
+    "title": "第1章函数极限与连续",
+    "question_count": 38,
+    "verified_count": 4
+  },
+  {
+    "id": "enhancement-calculus-02",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 2,
+    "title": "第2章数列极限",
+    "question_count": 11,
+    "verified_count": 0
+  },
+  {
+    "id": "enhancement-calculus-03",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 3,
+    "title": "第3章一元函数微分学的概念",
+    "question_count": 22,
+    "verified_count": 0
+  },
+  {
+    "id": "enhancement-calculus-04",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 4,
+    "title": "第4章一元函数微分学的计算",
+    "question_count": 16,
+    "verified_count": 1
+  },
+  {
+    "id": "enhancement-calculus-05",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 5,
+    "title": "第5章一元函数微分学的应用(一)——几何应用",
+    "question_count": 33,
+    "verified_count": 6
+  },
+  {
+    "id": "enhancement-calculus-06",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 6,
+    "title": "第6章一元函数微分学的应用(二)——中值定理、微分等式与微分不等式",
+    "question_count": 21,
+    "verified_count": 2
+  },
+  {
+    "id": "enhancement-calculus-07",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 7,
+    "title": "第7章一元函数微分学的应用(三—物理应用",
+    "question_count": 3,
+    "verified_count": 0
+  },
+  {
+    "id": "enhancement-calculus-08",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 8,
+    "title": "第8章一元函数积分学的概念与性质",
+    "question_count": 19,
+    "verified_count": 1
+  },
+  {
+    "id": "enhancement-calculus-09",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 9,
+    "title": "第9章一元函数积分学的计算",
+    "question_count": 28,
+    "verified_count": 1
+  },
+  {
+    "id": "enhancement-calculus-10",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 10,
+    "title": "第10章一元函数积分学的应用(一)—几何应用",
+    "question_count": 26,
+    "verified_count": 1
+  },
+  {
+    "id": "enhancement-calculus-11",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 11,
+    "title": "第11章一元函数积分学的应用(二)——积分等式与积分不等式",
+    "question_count": 7,
+    "verified_count": 0
+  },
+  {
+    "id": "enhancement-calculus-12",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 12,
+    "title": "第12章一元函数积分学的应用(三—物理应用",
+    "question_count": 5,
+    "verified_count": 1
+  },
+  {
+    "id": "enhancement-calculus-13",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 13,
+    "title": "第13章多元函数微分学",
+    "question_count": 40,
+    "verified_count": 4
+  },
+  {
+    "id": "enhancement-calculus-14",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 14,
+    "title": "第14章二重积分",
+    "question_count": 41,
+    "verified_count": 2
+  },
+  {
+    "id": "enhancement-calculus-15",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 15,
+    "title": "第15章微分方程",
+    "question_count": 40,
+    "verified_count": 8
+  },
+  {
+    "id": "enhancement-calculus-16",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 16,
+    "title": "第16章无穷级数",
+    "question_count": 38,
+    "verified_count": 1
+  },
+  {
+    "id": "enhancement-calculus-17",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 17,
+    "title": "第17章多元函数积分学的预备知识",
+    "question_count": 15,
+    "verified_count": 5
+  },
+  {
+    "id": "enhancement-calculus-18",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "calculus",
+    "chapter_number": 18,
+    "title": "第18章多元函数积分学",
+    "question_count": 29,
+    "verified_count": 0
+  },
+  {
+    "id": "enhancement-linear_algebra-01",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "linear_algebra",
+    "chapter_number": 1,
+    "title": "第1章行列式",
+    "question_count": 7,
+    "verified_count": 0
+  },
+  {
+    "id": "enhancement-linear_algebra-02",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "linear_algebra",
+    "chapter_number": 2,
+    "title": "第2章余子式和代数余子式的计算",
+    "question_count": 4,
+    "verified_count": 1
+  },
+  {
+    "id": "enhancement-linear_algebra-03",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "linear_algebra",
+    "chapter_number": 3,
+    "title": "第3章矩阵运算",
+    "question_count": 10,
+    "verified_count": 1
+  },
+  {
+    "id": "enhancement-linear_algebra-04",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "linear_algebra",
+    "chapter_number": 4,
+    "title": "第4章矩阵的秩",
+    "question_count": 8,
+    "verified_count": 1
+  },
+  {
+    "id": "enhancement-linear_algebra-05",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "linear_algebra",
+    "chapter_number": 5,
+    "title": "第5章线性方程组",
+    "question_count": 15,
+    "verified_count": 2
+  },
+  {
+    "id": "enhancement-linear_algebra-06",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "linear_algebra",
+    "chapter_number": 6,
+    "title": "第6章向量组",
+    "question_count": 11,
+    "verified_count": 1
+  },
+  {
+    "id": "enhancement-linear_algebra-07",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "linear_algebra",
+    "chapter_number": 7,
+    "title": "第7章特征值与特征向量",
+    "question_count": 9,
+    "verified_count": 0
+  },
+  {
+    "id": "enhancement-linear_algebra-08",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "linear_algebra",
+    "chapter_number": 8,
+    "title": "第8章相似理论",
+    "question_count": 21,
+    "verified_count": 4
+  },
+  {
+    "id": "enhancement-linear_algebra-09",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "linear_algebra",
+    "chapter_number": 9,
+    "title": "第9章二次型",
+    "question_count": 27,
+    "verified_count": 2
+  },
+  {
+    "id": "enhancement-probability-01",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "probability",
+    "chapter_number": 1,
+    "title": "第1章随机事件和概率",
+    "question_count": 6,
+    "verified_count": 1
+  },
+  {
+    "id": "enhancement-probability-02",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "probability",
+    "chapter_number": 2,
+    "title": "第2章一维随机变量及其分布",
+    "question_count": 9,
+    "verified_count": 1
+  },
+  {
+    "id": "enhancement-probability-03",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "probability",
+    "chapter_number": 3,
+    "title": "第3章一维随机变量函数的分布",
+    "question_count": 7,
+    "verified_count": 2
+  },
+  {
+    "id": "enhancement-probability-04",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "probability",
+    "chapter_number": 4,
+    "title": "第4章多维随机变量及其分布",
+    "question_count": 7,
+    "verified_count": 1
+  },
+  {
+    "id": "enhancement-probability-05",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "probability",
+    "chapter_number": 5,
+    "title": "第5章多维随机变量函数的分布",
+    "question_count": 12,
+    "verified_count": 1
+  },
+  {
+    "id": "enhancement-probability-06",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "probability",
+    "chapter_number": 6,
+    "title": "第6章数字特征",
+    "question_count": 21,
+    "verified_count": 2
+  },
+  {
+    "id": "enhancement-probability-07",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "probability",
+    "chapter_number": 7,
+    "title": "第7章大数定律与中心极限定理",
+    "question_count": 4,
+    "verified_count": 0
+  },
+  {
+    "id": "enhancement-probability-08",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "probability",
+    "chapter_number": 8,
+    "title": "第8章统计量及其分布",
+    "question_count": 12,
+    "verified_count": 0
+  },
+  {
+    "id": "enhancement-probability-09",
+    "batch": 4,
+    "phase": "enhancement",
+    "subject": "probability",
+    "chapter_number": 9,
+    "title": "第9章参数估计与假设检验",
+    "question_count": 29,
+    "verified_count": 2
+  },
+  {
+    "id": "comprehensive-comprehensive-01",
+    "batch": 5,
+    "phase": "comprehensive",
+    "subject": "comprehensive",
+    "chapter_number": 1,
+    "title": "测试卷一",
+    "question_count": 22,
+    "verified_count": 1
+  },
+  {
+    "id": "comprehensive-comprehensive-02",
+    "batch": 5,
+    "phase": "comprehensive",
+    "subject": "comprehensive",
+    "chapter_number": 2,
+    "title": "测试卷二",
+    "question_count": 22,
+    "verified_count": 0
+  },
+  {
+    "id": "comprehensive-comprehensive-03",
+    "batch": 5,
+    "phase": "comprehensive",
+    "subject": "comprehensive",
+    "chapter_number": 3,
+    "title": "测试卷三",
+    "question_count": 22,
+    "verified_count": 3
+  },
+  {
+    "id": "comprehensive-comprehensive-04",
+    "batch": 5,
+    "phase": "comprehensive",
+    "subject": "comprehensive",
+    "chapter_number": 4,
+    "title": "测试卷四",
+    "question_count": 22,
+    "verified_count": 2
+  }
+]

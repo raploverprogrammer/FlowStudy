@@ -1,0 +1,178 @@
+[
+  {
+    "id": "random-events",
+    "topic": "随机事件",
+    "difficulty": 1,
+    "core_concepts": ["样本空间与样本点", "事件的关系与运算", "互斥与对立"],
+    "classic_patterns": ["事件关系判断", "事件运算化简", "用集合语言描述事件"],
+    "goal": "能把文字条件准确翻译为事件，并区分互斥、对立与包含关系。",
+    "concept": "随机试验的全部可能结果组成样本空间 $\\Omega$，事件是 $\\Omega$ 的子集。$A\\cup B$ 表示至少一个发生，$A\\cap B$ 表示同时发生，$\\overline A$ 表示 A 不发生。互斥只要求 $A\\cap B=\\varnothing$；对立还要求 $A\\cup B=\\Omega$。",
+    "questions": [
+      {"id":"re-d1","phase":"diagnostic","type":"single","knowledge_point":"事件包含","question":"若 $A\\subset B$，则必然成立的是？","options":["A发生则B发生","B发生则A发生","A与B互斥","A与B独立"],"answer":[0],"explanation":"A 的每个样本点都属于 B，因此 A 发生必然导致 B 发生。"},
+      {"id":"re-d2","phase":"diagnostic","type":"boolean","knowledge_point":"互斥与对立","question":"两个互斥事件一定互为对立事件。","options":["正确","错误"],"answer":[1],"explanation":"互斥只要求交集为空；对立还要求并集为整个样本空间。"},
+      {"id":"re-d3","phase":"diagnostic","type":"multiple","knowledge_point":"事件运算","question":"下列恒等式正确的是？","options":["$A\\cap\\Omega=A$","$A\\cup\\Omega=\\Omega$","$A\\cap\\overline A=\\varnothing$","$A\\cup\\overline A=\\varnothing$"],"answer":[0,1,2],"explanation":"A 与其对立事件的并是整个样本空间。"},
+      {"id":"re-p1","phase":"practice","type":"single","knowledge_point":"事件运算","question":"“A、B 至少有一个不发生”应表示为？","options":["$\\overline A\\cup\\overline B$","$\\overline A\\cap\\overline B$","$A\\cap B$","$A\\cup B$"],"answer":[0],"explanation":"“至少一个不发生”是“同时发生”的对立事件，由德摩根律得到。"},
+      {"id":"re-p2","phase":"practice","type":"boolean","knowledge_point":"事件相等","question":"若 $A\\subset B$ 且 $B\\subset A$，则 $A=B$。","options":["正确","错误"],"answer":[0],"explanation":"两个集合互相包含时相等。"}
+    ]
+  },
+  {
+    "id": "probability-definition",
+    "topic": "概率定义",
+    "difficulty": 1,
+    "core_concepts": ["概率公理", "对立事件", "加法公式"],
+    "classic_patterns": ["概率性质判断", "并事件概率", "利用包含关系估计范围"],
+    "goal": "掌握概率基本性质，并能正确使用一般加法公式。",
+    "concept": "概率满足非负性、$P(\\Omega)=1$ 和可列可加性。常用结论有 $P(\\overline A)=1-P(A)$，以及 $P(A\\cup B)=P(A)+P(B)-P(AB)$。只有 A、B 互斥时，才能直接相加。",
+    "questions": [
+      {"id":"pd-d1","phase":"diagnostic","type":"single","knowledge_point":"对立事件","question":"若 $P(A)=0.35$，则 $P(\\overline A)$ 为？","options":["0.35","0.65","1.35","无法确定"],"answer":[1],"explanation":"对立事件概率之和为 1。"},
+      {"id":"pd-d2","phase":"diagnostic","type":"boolean","knowledge_point":"加法公式","question":"对任意 A、B，都有 $P(A\\cup B)=P(A)+P(B)$。","options":["正确","错误"],"answer":[1],"explanation":"一般情形还要减去重复计算的 $P(AB)$。"},
+      {"id":"pd-d3","phase":"diagnostic","type":"multiple","knowledge_point":"概率性质","question":"下列必然成立的是？","options":["$0\\le P(A)\\le1$","$P(\\varnothing)=0$","若$A\\subset B$则$P(A)\\le P(B)$","$P(A-B)=P(A)-P(B)$"],"answer":[0,1,2],"explanation":"一般应为 $P(A-B)=P(A)-P(AB)$。"},
+      {"id":"pd-p1","phase":"practice","type":"single","knowledge_point":"加法公式","question":"$P(A)=0.6,P(B)=0.5,P(AB)=0.3$，则 $P(A\\cup B)$ 为？","options":["0.2","0.8","1.1","1.4"],"answer":[1],"explanation":"代入一般加法公式得 0.6+0.5-0.3=0.8。"},
+      {"id":"pd-p2","phase":"practice","type":"single","knowledge_point":"事件差","question":"若 $A\\subset B,P(A)=0.3,P(B)=0.7$，则 $P(B-A)$ 为？","options":["0.1","0.3","0.4","1.0"],"answer":[2],"explanation":"A 是 B 的子集，因此 B 可拆为 A 与 B-A 两个互斥部分。"}
+    ]
+  },
+  {
+    "id": "classical-probability",
+    "topic": "古典概率",
+    "difficulty": 2,
+    "core_concepts": ["有限等可能", "排列与组合", "分子分母计数口径"],
+    "classic_patterns": ["抽样问题", "分组问题", "至少与至多的对立计算"],
+    "goal": "识别古典概型，并用统一计数口径计算事件概率。",
+    "concept": "样本点有限且等可能时，$P(A)=|A|/|\\Omega|$。排列关注顺序，组合不关注顺序。分子和分母必须采用同一种计数口径；“至少一个”常用对立事件更快。",
+    "questions": [
+      {"id":"cp-d1","phase":"diagnostic","type":"single","knowledge_point":"等可能结果","question":"掷两枚均匀硬币，恰好一枚正面朝上的概率是？","options":["$1/4$","$1/2$","$3/4$","1"],"answer":[1],"explanation":"四个等可能结果中，正反和反正满足条件。"},
+      {"id":"cp-d2","phase":"diagnostic","type":"multiple","knowledge_point":"古典概型条件","question":"古典概型要求？","options":["样本点有限","样本点等可能","事件互斥","结果连续"],"answer":[0,1],"explanation":"有限性和等可能性是古典概型的两个特征。"},
+      {"id":"cp-d3","phase":"diagnostic","type":"boolean","knowledge_point":"排列组合","question":"从 6 人中选 2 人担任不同职务，应使用 $C_6^2$。","options":["正确","错误"],"answer":[1],"explanation":"职务不同，顺序有意义，应使用排列数。"},
+      {"id":"cp-p1","phase":"practice","type":"single","knowledge_point":"组合计数","question":"从 5 人中随机选 2 人，甲被选中的概率为？","options":["$1/5$","$2/5$","$1/2$","$3/5$"],"answer":[1],"explanation":"有利选法 $C_4^1$，全部选法 $C_5^2$，比值为 $2/5$。"},
+      {"id":"cp-p2","phase":"practice","type":"single","knowledge_point":"对立事件计数","question":"掷两次骰子，至少一次出现 6 的概率是？","options":["$1/6$","$5/18$","$11/36$","$25/36$"],"answer":[2],"explanation":"用对立事件：$1-(5/6)^2=11/36$。"}
+    ]
+  },
+  {
+    "id": "conditional-probability",
+    "topic": "条件概率",
+    "difficulty": 2,
+    "core_concepts": ["条件概率定义", "样本空间缩小", "乘法公式"],
+    "classic_patterns": ["不放回抽样", "条件事件计算", "多步试验"],
+    "goal": "理解条件改变样本空间，并能用乘法公式拆解多步事件。",
+    "concept": "当 $P(B)>0$ 时，$P(A\\mid B)=P(AB)/P(B)$。已知 B 发生后，B 成为新的样本空间。乘法公式为 $P(AB)=P(A)P(B\\mid A)$，多步事件可以继续逐层展开。",
+    "questions": [
+      {"id":"co-d1","phase":"diagnostic","type":"single","knowledge_point":"条件概率定义","question":"若 $P(A)=0.5,P(AB)=0.2$，则 $P(B\\mid A)$ 为？","options":["0.1","0.2","0.4","0.7"],"answer":[2],"explanation":"$P(B\\mid A)=P(AB)/P(A)=0.4$。"},
+      {"id":"co-d2","phase":"diagnostic","type":"boolean","knowledge_point":"条件概率含义","question":"已知 B 发生后，可以把 B 看作新的样本空间。","options":["正确","错误"],"answer":[0],"explanation":"条件概率就是在条件事件内重新归一化。"},
+      {"id":"co-d3","phase":"diagnostic","type":"multiple","knowledge_point":"乘法公式","question":"下列正确的是？","options":["$P(AB)=P(A)P(B\\mid A)$","$P(AB)=P(B)P(A\\mid B)$","$P(A\\mid B)=P(A)$恒成立","$P(A\\mid B)=P(AB)/P(B)$"],"answer":[0,1,3],"explanation":"第三项只在 A、B 独立等特定条件下成立。"},
+      {"id":"co-p1","phase":"practice","type":"single","knowledge_point":"不放回抽样","question":"袋中 3 红 2 白，不放回取球。已知第一次为红，第二次仍为红的概率？","options":["$1/5$","$1/2$","$3/5$","$2/3$"],"answer":[1],"explanation":"第一次取红后剩 2 红 2 白，所以概率为 2/4。"},
+      {"id":"co-p2","phase":"practice","type":"single","knowledge_point":"乘法公式","question":"$P(A)=0.4,P(B\\mid A)=0.5$，则 $P(AB)$ 为？","options":["0.1","0.2","0.4","0.9"],"answer":[1],"explanation":"由乘法公式得 0.4×0.5=0.2。"}
+    ]
+  },
+  {
+    "id": "independence",
+    "topic": "独立性",
+    "difficulty": 2,
+    "core_concepts": ["两事件独立", "独立与互斥", "多事件独立"],
+    "classic_patterns": ["独立性判断", "重复独立试验", "对立事件的独立性"],
+    "goal": "能用概率乘积判断独立，并避免把独立与互斥混淆。",
+    "concept": "A、B 独立等价于 $P(AB)=P(A)P(B)$。若条件概率有定义，也等价于 $P(A\\mid B)=P(A)$。概率均为正的互斥事件不独立；两两独立也未必推出相互独立。",
+    "questions": [
+      {"id":"in-d1","phase":"diagnostic","type":"single","knowledge_point":"独立定义","question":"A、B 独立且 $P(A)=0.4,P(B)=0.5$，则 $P(AB)$ 为？","options":["0.1","0.2","0.4","0.9"],"answer":[1],"explanation":"独立时交事件概率等于各概率之积。"},
+      {"id":"in-d2","phase":"diagnostic","type":"boolean","knowledge_point":"独立与互斥","question":"两个互斥事件一定相互独立。","options":["正确","错误"],"answer":[1],"explanation":"概率均正时，互斥使交概率为 0，而概率乘积大于 0。"},
+      {"id":"in-d3","phase":"diagnostic","type":"multiple","knowledge_point":"独立性质","question":"若 A、B 独立，哪些事件对仍独立？","options":["A与$\\overline B$","$\\overline A$与B","$\\overline A$与$\\overline B$","A与A"],"answer":[0,1,2],"explanation":"对其中任一事件取对立，独立性保持。"},
+      {"id":"in-p1","phase":"practice","type":"single","knowledge_point":"独立性判断","question":"$P(A)=0.3,P(B)=0.4,P(AB)=0.12$，A、B 的关系是？","options":["独立","互斥","对立","无法判断"],"answer":[0],"explanation":"$0.3\\times0.4=0.12$，满足独立定义。"},
+      {"id":"in-p2","phase":"practice","type":"boolean","knowledge_point":"多事件独立","question":"三个事件两两独立，就一定相互独立。","options":["正确","错误"],"answer":[1],"explanation":"相互独立还要求三个事件交集的概率等于三个概率之积。"}
+    ]
+  },
+  {
+    "id": "total-probability",
+    "topic": "全概率公式",
+    "difficulty": 2,
+    "core_concepts": ["完备事件组", "分路径计算", "原因到结果"],
+    "classic_patterns": ["多来源产品", "多箱抽取", "分情况命中"],
+    "goal": "能找到互斥且穷尽的路径，并用全概率公式求结果概率。",
+    "concept": "若 $B_1,\\ldots,B_n$ 两两互斥且并为 $\\Omega$，则它们构成完备事件组。全概率公式为 $P(A)=\\sum_i P(B_i)P(A\\mid B_i)$。记忆抓手是“每条路径先乘，所有路径再加”。",
+    "questions": [
+      {"id":"tp-d1","phase":"diagnostic","type":"single","knowledge_point":"全概率计算","question":"两箱被选概率各 0.5，取到红球的条件概率分别为 0.2、0.6。红球总概率为？","options":["0.2","0.3","0.4","0.8"],"answer":[2],"explanation":"$0.5\\times0.2+0.5\\times0.6=0.4$。"},
+      {"id":"tp-d2","phase":"diagnostic","type":"multiple","knowledge_point":"完备事件组","question":"完备事件组需要满足？","options":["两两互斥","并集为样本空间","每个事件概率大于0","相互独立"],"answer":[0,1,2],"explanation":"完备事件组不要求相互独立。"},
+      {"id":"tp-d3","phase":"diagnostic","type":"boolean","knowledge_point":"全概率思想","question":"全概率公式适合处理同一结果由多条互斥路径产生的问题。","options":["正确","错误"],"answer":[0],"explanation":"它把结果按互斥且穷尽的原因路径分解。"},
+      {"id":"tp-p1","phase":"practice","type":"single","knowledge_point":"多来源问题","question":"甲乙机器产量占 60%、40%，次品率为 1%、2%，随机产品为次品的概率？","options":["0.006","0.008","0.014","0.03"],"answer":[2],"explanation":"$0.6\\times0.01+0.4\\times0.02=0.014$。"},
+      {"id":"tp-p2","phase":"practice","type":"single","knowledge_point":"路径分解","question":"使用全概率公式时，第一步通常是？","options":["求后验概率","划分完备事件组","判断事件独立","计算排列数"],"answer":[1],"explanation":"先按原因或来源划分互斥且穷尽的路径。"}
+    ]
+  },
+  {
+    "id": "bayes",
+    "topic": "贝叶斯公式",
+    "difficulty": 3,
+    "core_concepts": ["先验概率", "似然", "后验概率"],
+    "classic_patterns": ["次品来源", "疾病检测", "从结果反推原因"],
+    "goal": "能从观察结果反推原因，并正确识别分子与全概率分母。",
+    "concept": "贝叶斯公式为 $P(B_i\\mid A)=\\frac{P(B_i)P(A\\mid B_i)}{\\sum_jP(B_j)P(A\\mid B_j)}$。分子是目标路径与结果共同发生的概率，分母是结果 A 的全概率。",
+    "questions": [
+      {"id":"ba-d1","phase":"diagnostic","type":"single","knowledge_point":"公式结构","question":"贝叶斯公式的分母通常由什么计算？","options":["加法公式","全概率公式","独立性公式","古典概型"],"answer":[1],"explanation":"分母是观察结果的总概率。"},
+      {"id":"ba-d2","phase":"diagnostic","type":"multiple","knowledge_point":"贝叶斯概念","question":"贝叶斯公式涉及？","options":["先验概率","条件似然","后验概率","排列数"],"answer":[0,1,2],"explanation":"排列数不是贝叶斯公式的组成概念。"},
+      {"id":"ba-d3","phase":"diagnostic","type":"boolean","knowledge_point":"后验更新","question":"贝叶斯公式用于观察结果后更新原因发生的概率。","options":["正确","错误"],"answer":[0],"explanation":"更新后的原因概率就是后验概率。"},
+      {"id":"ba-p1","phase":"practice","type":"single","knowledge_point":"来源反推","question":"甲乙产量占 60%、40%，次品率 1%、2%。已知是次品，来自乙的概率为？","options":["$2/7$","$3/7$","$4/7$","$5/7$"],"answer":[2],"explanation":"分子为 0.4×0.02，分母为 0.014，比值为 4/7。"},
+      {"id":"ba-p2","phase":"practice","type":"single","knowledge_point":"分子识别","question":"求 $P(B_i\\mid A)$ 时，贝叶斯公式分子是？","options":["$P(A)$","$P(B_i)$","$P(B_i)P(A\\mid B_i)$","$P(A)P(B_i)$"],"answer":[2],"explanation":"分子表示目标原因路径与已观察结果共同发生。"}
+    ]
+  },
+  {
+    "id": "random-variable",
+    "topic": "随机变量",
+    "difficulty": 2,
+    "core_concepts": ["随机变量定义", "离散型与连续型", "随机变量函数"],
+    "classic_patterns": ["由试验结果定义变量", "判断变量类型", "求函数分布"],
+    "goal": "理解随机变量是样本点到实数的映射，并区分离散型和连续型。",
+    "concept": "随机变量 X 是定义在样本空间上的实值函数，它把随机试验结果数值化。取值有限或可列时通常为离散型；取值充满区间时通常为连续型。随机变量不是“会随机变化的普通变量”，而是固定的映射。",
+    "questions": [
+      {"id":"rv-d1","phase":"diagnostic","type":"single","knowledge_point":"随机变量定义","question":"随机变量本质上是？","options":["随机变化的数","样本空间到实数的函数","一个事件","一个概率"],"answer":[1],"explanation":"随机变量把每个样本点映射到一个实数。"},
+      {"id":"rv-d2","phase":"diagnostic","type":"boolean","knowledge_point":"变量类型","question":"掷骰子的点数是离散型随机变量。","options":["正确","错误"],"answer":[0],"explanation":"其可能取值只有 1 到 6，共有限个。"},
+      {"id":"rv-d3","phase":"diagnostic","type":"multiple","knowledge_point":"连续型判断","question":"下列通常可建模为连续型随机变量的是？","options":["等待时间","身高","一天来电次数","温度"],"answer":[0,1,3],"explanation":"来电次数只能取非负整数，通常为离散型。"},
+      {"id":"rv-p1","phase":"practice","type":"single","knowledge_point":"变量取值","question":"连续掷两次硬币，X 表示正面次数，则 X 的可能取值是？","options":["0,1","1,2","0,1,2","任意实数"],"answer":[2],"explanation":"两次试验中正面可能出现 0、1 或 2 次。"},
+      {"id":"rv-p2","phase":"practice","type":"boolean","knowledge_point":"映射唯一性","question":"同一个样本点在同一个随机变量下可以对应两个不同数值。","options":["正确","错误"],"answer":[1],"explanation":"函数对每个输入必须有唯一输出。"}
+    ]
+  },
+  {
+    "id": "distribution-function",
+    "topic": "分布函数",
+    "difficulty": 3,
+    "core_concepts": ["分布函数定义", "右连续性", "区间概率"],
+    "classic_patterns": ["由分布函数求概率", "判断合法分布函数", "求跳跃点概率"],
+    "goal": "掌握 $F(x)=P(X\\le x)$，并能由分布函数计算区间概率。",
+    "concept": "分布函数定义为 $F(x)=P(X\\le x)$。它单调不减、右连续，且在负无穷趋于 0、正无穷趋于 1。区间概率常用 $P(a<X\\le b)=F(b)-F(a)$；跳跃大小等于对应点的概率。",
+    "questions": [
+      {"id":"df-d1","phase":"diagnostic","type":"single","knowledge_point":"分布函数定义","question":"分布函数 $F(x)$ 等于？","options":["$P(X<x)$","$P(X\\le x)$","$P(X=x)$","$P(X>x)$"],"answer":[1],"explanation":"这是分布函数的定义。"},
+      {"id":"df-d2","phase":"diagnostic","type":"multiple","knowledge_point":"分布函数性质","question":"任意分布函数都满足？","options":["单调不减","右连续","值域在[0,1]","处处可导"],"answer":[0,1,2],"explanation":"分布函数不要求处处可导。"},
+      {"id":"df-d3","phase":"diagnostic","type":"boolean","knowledge_point":"区间概率","question":"$P(a<X\\le b)=F(b)-F(a)$。","options":["正确","错误"],"answer":[0],"explanation":"两个累积事件相减正好留下该左开右闭区间。"},
+      {"id":"df-p1","phase":"practice","type":"single","knowledge_point":"区间概率","question":"若 $F(2)=0.7,F(1)=0.3$，则 $P(1<X\\le2)$ 为？","options":["0.3","0.4","0.7","1.0"],"answer":[1],"explanation":"$F(2)-F(1)=0.4$。"},
+      {"id":"df-p2","phase":"practice","type":"boolean","knowledge_point":"极限性质","question":"任意分布函数都满足 $\\lim_{x\\to+\\infty}F(x)=1$。","options":["正确","错误"],"answer":[0],"explanation":"随着上界趋于正无穷，事件覆盖全部样本。"}
+    ]
+  },
+  {
+    "id": "expectation",
+    "topic": "期望",
+    "difficulty": 3,
+    "core_concepts": ["数学期望", "期望的线性性", "随机变量函数的期望"],
+    "classic_patterns": ["离散期望计算", "线性变换", "利用指示变量"],
+    "goal": "理解期望是概率加权平均，并熟练使用线性性质。",
+    "concept": "离散型随机变量的期望为 $E(X)=\\sum x_ip_i$；连续型为 $E(X)=\\int xf(x)dx$。只要期望存在，就有 $E(aX+b)=aE(X)+b$，该性质不要求随机变量独立。",
+    "questions": [
+      {"id":"ex-d1","phase":"diagnostic","type":"single","knowledge_point":"离散期望","question":"X 以相同概率取 1、3，则 $E(X)$ 为？","options":["1","2","3","4"],"answer":[1],"explanation":"概率加权平均为 1×0.5+3×0.5=2。"},
+      {"id":"ex-d2","phase":"diagnostic","type":"boolean","knowledge_point":"期望线性性","question":"$E(X+Y)=E(X)+E(Y)$ 需要 X、Y 独立。","options":["正确","错误"],"answer":[1],"explanation":"期望的线性性不要求独立。"},
+      {"id":"ex-d3","phase":"diagnostic","type":"single","knowledge_point":"线性变换","question":"$E(X)=2$，则 $E(3X-1)$ 为？","options":["3","5","6","7"],"answer":[1],"explanation":"$3E(X)-1=5$。"},
+      {"id":"ex-p1","phase":"practice","type":"single","knowledge_point":"伯努利期望","question":"X 服从参数为 p 的伯努利分布，则 $E(X)$ 为？","options":["0","p","1-p","p(1-p)"],"answer":[1],"explanation":"X 取 1 的概率为 p、取 0 的概率为 1-p。"},
+      {"id":"ex-p2","phase":"practice","type":"multiple","knowledge_point":"期望性质","question":"期望存在时，下列正确的是？","options":["$E(c)=c$","$E(aX)=aE(X)$","$E(X+Y)=E(X)+E(Y)$","$E(XY)=E(X)E(Y)$恒成立"],"answer":[0,1,2],"explanation":"乘积期望拆分通常需要独立等额外条件。"}
+    ]
+  },
+  {
+    "id": "variance",
+    "topic": "方差",
+    "difficulty": 3,
+    "core_concepts": ["方差定义", "计算公式", "线性变换与独立和"],
+    "classic_patterns": ["用二阶矩求方差", "标准化", "独立变量和的方差"],
+    "goal": "理解方差衡量波动，并掌握 $D(X)=E(X^2)-[E(X)]^2$。",
+    "concept": "方差 $D(X)=E[(X-E(X))^2]=E(X^2)-[E(X)]^2$。$D(aX+b)=a^2D(X)$，平移不改变方差。若 X、Y 独立，则 $D(X+Y)=D(X)+D(Y)$。",
+    "questions": [
+      {"id":"va-d1","phase":"diagnostic","type":"single","knowledge_point":"方差计算","question":"$E(X)=2,E(X^2)=5$，则 $D(X)$ 为？","options":["1","2","3","5"],"answer":[0],"explanation":"$D(X)=5-2^2=1$。"},
+      {"id":"va-d2","phase":"diagnostic","type":"boolean","knowledge_point":"平移性质","question":"给随机变量加常数会改变其方差。","options":["正确","错误"],"answer":[1],"explanation":"平移不改变数据围绕均值的离散程度。"},
+      {"id":"va-d3","phase":"diagnostic","type":"single","knowledge_point":"线性变换","question":"$D(X)=3$，则 $D(2X-1)$ 为？","options":["3","5","6","12"],"answer":[3],"explanation":"方差乘以系数平方，即 $2^2\\times3=12$。"},
+      {"id":"va-p1","phase":"practice","type":"single","knowledge_point":"伯努利方差","question":"参数为 p 的伯努利变量方差为？","options":["p","1-p","p(1-p)","$p^2$"],"answer":[2],"explanation":"伯努利分布的方差为 p(1-p)。"},
+      {"id":"va-p2","phase":"practice","type":"boolean","knowledge_point":"独立和方差","question":"若 X、Y 独立，则 $D(X+Y)=D(X)+D(Y)$。","options":["正确","错误"],"answer":[0],"explanation":"独立使协方差项为 0。"}
+    ]
+  }
+]
