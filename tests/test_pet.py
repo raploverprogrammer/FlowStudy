@@ -21,9 +21,20 @@ class LuluPetTests(unittest.TestCase):
         self.assertIn("flowstudy-lulu-pet-position-v1", html)
         self.assertIn("pointerdown", html)
         self.assertIn("localStorage", html)
+        self.assertIn("previous.remove()", html)
+        self.assertIn("__flowstudyLuluCleanup", html)
         self.assertIn("粉粉加油！", html)
         self.assertIn("data:image/png;base64,", html)
         iframe_mock.assert_called_once_with(html, width=1, height=1)
+
+    @patch("flowstudy.pet.st.iframe")
+    def test_each_rerun_gets_a_fresh_mount_script(self, iframe_mock) -> None:
+        render_lulu_pet()
+        render_lulu_pet()
+
+        first_html = iframe_mock.call_args_list[0].args[0]
+        second_html = iframe_mock.call_args_list[1].args[0]
+        self.assertNotEqual(first_html, second_html)
 
     @patch("flowstudy.pet.components.html")
     @patch("flowstudy.pet.st.iframe", None)
