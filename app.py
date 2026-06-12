@@ -4,6 +4,7 @@ import streamlit as st
 
 from flowstudy.config import LULU_TUTOR_IMAGE
 from flowstudy.database import init_db
+from flowstudy.pet import render_lulu_pet
 from flowstudy.styles import apply_styles
 from flowstudy.views import (
     render_home,
@@ -50,3 +51,4 @@ st.session_state["app_view"] = page
 
 sync_study_timer(page)
 PAGES[page]()
+render_lulu_pet()
