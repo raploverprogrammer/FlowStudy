@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = ROOT / "data" / "flowstudy.db"
 ASSET_ROOT = ROOT / "data" / "question_bank"
 MANIFEST_PATH = ASSET_ROOT / "manifest.json"
+ACTIVE_SUBJECTS = {"calculus"}
 
 SUBJECT_NAMES = {
     "calculus": "高等数学",
@@ -769,7 +770,7 @@ def write_manifest(conn: sqlite3.Connection) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch", type=int, choices=range(1, 6))
+    parser.add_argument("--batch", type=int, choices=(1, 4))
     parser.add_argument("--section")
     parser.add_argument("--list", action="store_true")
     args = parser.parse_args()
@@ -784,7 +785,8 @@ def main() -> None:
 
     selected = [
         section for section in sections
-        if (args.batch is None or section.batch == args.batch)
+        if section.subject in ACTIVE_SUBJECTS
+        and (args.batch is None or section.batch == args.batch)
         and (args.section is None or section.id == args.section)
     ]
     if args.section and not selected:

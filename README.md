@@ -1,12 +1,12 @@
 # FlowStudy V4 · 数学一知识航海
 
-FlowStudy 是一个面向考研数学一的本地学习伙伴。题目来自用户提供的《张宇 1000 题》试题册与解析册；DeepSeek 不再生成题目，只在用户点击“请教噜噜”时讲解当前单题。
+FlowStudy 是一个面向考研数学一的本地学习伙伴。当前题库只保留高等数学部分；DeepSeek 不生成题目，只在用户点击“请教噜噜”时讲解当前单题。
 
 ## 当前流程
 
 ```text
 首页
-├── 开始探索 → 数学一完整知识航线 → 固定题库五题航行
+├── 开始探索 → 高等数学知识航线 → 固定题库五题航行
 ├── 触礁记录 → 重新思考错题 → 查看原解析
 └── 发现宝藏 → 收藏总结与反思
 ```
@@ -17,11 +17,10 @@ FlowStudy 是一个面向考研数学一的本地学习伙伴。题目来自用�
 
 知识航线包含：
 
-- 基础篇：高等数学 19 章、线性代数 6 章、概率论与数理统计 6 章
-- 强化篇：高等数学 18 章、线性代数 9 章、概率论与数理统计 9 章
-- 综合篇：数学一测试卷 4 套
+- 基础篇：高等数学 19 章
+- 强化篇：高等数学 18 章
 
-题库共 71 个章节/试卷、1256 道题。每题保存原题图片和解析图片，避免公式 OCR 文本影响阅读。
+题库共 37 个章节、762 道高等数学题。线性代数、概率论与数理统计及综合卷已移除，后续将使用新的专项题库。
 
 ## 判题规则
 
@@ -75,13 +74,10 @@ python -m pip install -r requirements-import.txt
 
 ```powershell
 python tools/import_question_bank.py --batch 1
-python tools/import_question_bank.py --batch 2
-python tools/import_question_bank.py --batch 3
 python tools/import_question_bank.py --batch 4
-python tools/import_question_bank.py --batch 5
 ```
 
-题库写入 `data/flowstudy.db`，裁图写入 `data/question_bank/`。这些内容仅供本地个人学习使用，不应重新分发。
+当前导入脚本只接收高等数学批次。题库写入 `data/flowstudy.db`，裁图写入 `data/question_bank/`。这些内容仅供本地个人学习使用，不应重新分发。
 
 ## 测试
 

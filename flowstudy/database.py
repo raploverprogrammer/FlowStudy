@@ -1163,14 +1163,9 @@ def get_question_bank_sections() -> list[dict[str, Any]]:
                    COUNT(DISTINCT a.question_id) AS answered_questions
             FROM question_bank_sections s
             LEFT JOIN quiz_attempts a ON a.topic_id = s.id
+            WHERE s.subject = 'calculus'
             GROUP BY s.id
             ORDER BY s.batch,
-                     CASE s.subject
-                       WHEN 'calculus' THEN 1
-                       WHEN 'linear_algebra' THEN 2
-                       WHEN 'probability' THEN 3
-                       ELSE 4
-                     END,
                      s.chapter_number
             """
         ).fetchall()
@@ -1194,7 +1189,7 @@ def get_question_bank_question(question_id: str) -> dict[str, Any] | None:
             SELECT q.*, s.title AS section_title, s.phase, s.subject
             FROM question_bank q
             JOIN question_bank_sections s ON s.id = q.section_id
-            WHERE q.id = ?
+            WHERE q.id = ? AND s.subject = 'calculus'
             """,
             (question_id,),
         ).fetchone()
@@ -1215,7 +1210,7 @@ def choose_question_bank_questions(
                    ) THEN 1 ELSE 0 END AS seen
             FROM question_bank q
             JOIN question_bank_sections s ON s.id = q.section_id
-            WHERE q.section_id = ?
+            WHERE q.section_id = ? AND s.subject = 'calculus'
             ORDER BY seen, RANDOM()
             LIMIT ?
             """,

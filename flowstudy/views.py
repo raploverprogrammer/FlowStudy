@@ -597,16 +597,13 @@ def _render_topic_tree() -> None:
     }
     subject_names = {
         "calculus": "高等数学",
-        "linear_algebra": "线性代数",
-        "probability": "概率论与数理统计",
-        "comprehensive": "数学一综合卷",
     }
-    for phase in ("foundation", "enhancement", "comprehensive"):
+    for phase in ("foundation", "enhancement"):
         phase_sections = [item for item in sections if item["phase"] == phase]
         if not phase_sections:
             continue
         st.markdown(f"## {phase_names[phase]}")
-        for subject in ("calculus", "linear_algebra", "probability", "comprehensive"):
+        for subject in ("calculus",):
             subject_sections = [
                 item for item in phase_sections if item["subject"] == subject
             ]
