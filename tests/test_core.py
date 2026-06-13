@@ -204,7 +204,7 @@ class DatabaseTests(unittest.TestCase):
         database.record_question_bank_attempt(questions[0], "A", False)
         self.assertEqual(database.get_wrong_questions()[0]["question_id"], "bank-q1")
 
-    def test_question_bank_only_exposes_calculus(self) -> None:
+    def test_question_bank_exposes_all_imported_subjects(self) -> None:
         with database.connection() as conn:
             for section_id, subject in (
                 ("calculus-section", "calculus"),
@@ -225,7 +225,14 @@ class DatabaseTests(unittest.TestCase):
         sections = database.get_question_bank_sections()
         self.assertEqual(
             [section["id"] for section in sections],
-            ["calculus-section"],
+            [
+                "calculus-section",
+                "linear-section",
+                "probability-section",
+            ],
+        )
+        self.assertTrue(
+            all(section["source"] == "zhangyu1000" for section in sections)
         )
 
     def test_growth_overview_treats_unseen_concepts_as_seed(self) -> None:

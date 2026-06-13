@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = ROOT / "data" / "flowstudy.db"
 ASSET_ROOT = (ROOT / "data" / "question_bank").resolve()
 KEEP_SUBJECT = "calculus"
+LEGACY_SOURCE = "zhangyu1000"
 
 
 def prune_database() -> dict[str, int]:
@@ -17,17 +18,20 @@ def prune_database() -> dict[str, int]:
     try:
         connection.execute("PRAGMA foreign_keys = ON")
         removed_sections = connection.execute(
-            "SELECT COUNT(*) FROM question_bank_sections WHERE subject != ?",
-            (KEEP_SUBJECT,),
+            """
+            SELECT COUNT(*) FROM question_bank_sections
+            WHERE source = ? AND subject != ?
+            """,
+            (LEGACY_SOURCE, KEEP_SUBJECT),
         ).fetchone()[0]
         removed_questions = connection.execute(
             """
             SELECT COUNT(*)
             FROM question_bank q
             JOIN question_bank_sections s ON s.id = q.section_id
-            WHERE s.subject != ?
+            WHERE s.source = ? AND s.subject != ?
             """,
-            (KEEP_SUBJECT,),
+            (LEGACY_SOURCE, KEEP_SUBJECT),
         ).fetchone()[0]
         connection.execute("BEGIN")
         connection.execute(
@@ -37,10 +41,10 @@ def prune_database() -> dict[str, int]:
                 SELECT q.id
                 FROM question_bank q
                 JOIN question_bank_sections s ON s.id = q.section_id
-                WHERE s.subject != ?
+                WHERE s.source = ? AND s.subject != ?
             )
             """,
-            (KEEP_SUBJECT,),
+            (LEGACY_SOURCE, KEEP_SUBJECT),
         )
         connection.execute(
             """
@@ -49,26 +53,36 @@ def prune_database() -> dict[str, int]:
                 SELECT q.id
                 FROM question_bank q
                 JOIN question_bank_sections s ON s.id = q.section_id
-                WHERE s.subject != ?
+                WHERE s.source = ? AND s.subject != ?
             )
             OR topic_id IN (
-                SELECT id FROM question_bank_sections WHERE subject != ?
+                SELECT id FROM question_bank_sections
+                WHERE source = ? AND subject != ?
             )
             """,
-            (KEEP_SUBJECT, KEEP_SUBJECT),
+            (
+                LEGACY_SOURCE,
+                KEEP_SUBJECT,
+                LEGACY_SOURCE,
+                KEEP_SUBJECT,
+            ),
         )
         connection.execute(
             """
             DELETE FROM question_bank
             WHERE section_id IN (
-                SELECT id FROM question_bank_sections WHERE subject != ?
+                SELECT id FROM question_bank_sections
+                WHERE source = ? AND subject != ?
             )
             """,
-            (KEEP_SUBJECT,),
+            (LEGACY_SOURCE, KEEP_SUBJECT),
         )
         connection.execute(
-            "DELETE FROM question_bank_sections WHERE subject != ?",
-            (KEEP_SUBJECT,),
+            """
+            DELETE FROM question_bank_sections
+            WHERE source = ? AND subject != ?
+            """,
+            (LEGACY_SOURCE, KEEP_SUBJECT),
         )
         connection.commit()
         connection.execute("VACUUM")
@@ -84,6 +98,8 @@ def prune_assets() -> int:
     removed = 0
     for directory in ASSET_ROOT.iterdir():
         if not directory.is_dir():
+            continue
+        if directory.name == "lilin880":
             continue
         if "-calculus-" in directory.name:
             continue

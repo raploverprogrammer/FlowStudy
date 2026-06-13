@@ -211,6 +211,13 @@ def init_db() -> None:
                 "rating": "TEXT",
                 "question_images_json": "TEXT NOT NULL DEFAULT '[]'",
             },
+            "question_bank_sections": {
+                "source": "TEXT NOT NULL DEFAULT 'zhangyu1000'",
+                "source_label": "TEXT NOT NULL DEFAULT '张宇1000题'",
+            },
+            "question_bank": {
+                "source_question_label": "TEXT NOT NULL DEFAULT ''",
+            },
         }.items():
             for name, definition in fields.items():
                 _add_column(conn, table, name, definition)
@@ -1163,10 +1170,22 @@ def get_question_bank_sections() -> list[dict[str, Any]]:
                    COUNT(DISTINCT a.question_id) AS answered_questions
             FROM question_bank_sections s
             LEFT JOIN quiz_attempts a ON a.topic_id = s.id
-            WHERE s.subject = 'calculus'
             GROUP BY s.id
-            ORDER BY s.batch,
-                     s.chapter_number
+            ORDER BY s.source,
+                     s.batch,
+                     CASE s.subject
+                         WHEN 'calculus' THEN 1
+                         WHEN 'linear_algebra' THEN 2
+                         WHEN 'probability' THEN 3
+                         ELSE 4
+                     END,
+                     s.chapter_number,
+                     CASE s.phase
+                         WHEN 'foundation' THEN 1
+                         WHEN 'comprehensive' THEN 2
+                         WHEN 'extension' THEN 3
+                         ELSE 4
+                     END
             """
         ).fetchall()
     return [dict(row) for row in rows]
@@ -1186,10 +1205,11 @@ def get_question_bank_question(question_id: str) -> dict[str, Any] | None:
     with connection() as conn:
         row = conn.execute(
             """
-            SELECT q.*, s.title AS section_title, s.phase, s.subject
+            SELECT q.*, s.title AS section_title, s.phase, s.subject,
+                   s.source, s.source_label
             FROM question_bank q
             JOIN question_bank_sections s ON s.id = q.section_id
-            WHERE q.id = ? AND s.subject = 'calculus'
+            WHERE q.id = ?
             """,
             (question_id,),
         ).fetchone()
@@ -1204,13 +1224,14 @@ def choose_question_bank_questions(
         rows = conn.execute(
             """
             SELECT q.*, s.title AS section_title, s.phase, s.subject,
+                   s.source, s.source_label,
                    CASE WHEN EXISTS(
                        SELECT 1 FROM quiz_attempts a
                        WHERE a.question_id = q.id
                    ) THEN 1 ELSE 0 END AS seen
             FROM question_bank q
             JOIN question_bank_sections s ON s.id = q.section_id
-            WHERE q.section_id = ? AND s.subject = 'calculus'
+            WHERE q.section_id = ?
             ORDER BY seen, RANDOM()
             LIMIT ?
             """,

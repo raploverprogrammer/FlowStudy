@@ -591,67 +591,88 @@ def _render_topic_tree() -> None:
         )
 
     phase_names = {
-        "foundation": "基础篇",
-        "enhancement": "强化篇",
-        "comprehensive": "综合测试",
+        "foundation": "基础题",
+        "enhancement": "强化题",
+        "comprehensive": "综合题",
+        "extension": "拓展题",
     }
     subject_names = {
         "calculus": "高等数学",
+        "linear_algebra": "线性代数",
+        "probability": "概率论与数理统计",
     }
-    for phase in ("foundation", "enhancement"):
-        phase_sections = [item for item in sections if item["phase"] == phase]
-        if not phase_sections:
-            continue
-        st.markdown(f"## {phase_names[phase]}")
-        for subject in ("calculus",):
-            subject_sections = [
-                item for item in phase_sections if item["subject"] == subject
-            ]
-            if not subject_sections:
-                continue
-            with st.expander(
-                f"{subject_names[subject]} · {len(subject_sections)} 个章节",
-                expanded=False,
-            ):
-                for section in subject_sections:
-                    attempts = int(section["attempts"])
-                    correct = int(section["correct_attempts"])
-                    answered = int(section["answered_questions"])
-                    total_questions = int(section["question_count"])
-                    accuracy = correct / attempts if attempts else 0.0
-                    coverage = (
-                        answered / total_questions
-                        if total_questions
-                        else 0.0
-                    )
-                    copy, action = st.columns(
-                        [4, 1.2],
-                        vertical_alignment="center",
-                    )
-                    copy.markdown(
-                        f"**{section['title']}**　{_section_rank(section)}"
-                    )
-                    copy.caption(
-                        f"{total_questions} 题"
-                        + (
-                            f" · 已答 {answered} 题 · 正确率 {accuracy:.0%}"
-                            if attempts
-                            else " · 尚未开始"
+    sources: dict[str, list[dict[str, Any]]] = {}
+    for section in sections:
+        sources.setdefault(str(section["source_label"]), []).append(section)
+    source_tabs = st.tabs(list(sources))
+    for source_tab, source_item in zip(
+        source_tabs,
+        sources.items(),
+        strict=True,
+    ):
+        _, source_sections = source_item
+        with source_tab:
+            for subject in ("calculus", "linear_algebra", "probability"):
+                subject_sections = [
+                    item
+                    for item in source_sections
+                    if item["subject"] == subject
+                ]
+                if not subject_sections:
+                    continue
+                chapters = len(
+                    {
+                        int(item["chapter_number"])
+                        for item in subject_sections
+                    }
+                )
+                with st.expander(
+                    f"{subject_names[subject]} · {chapters} 个章节",
+                    expanded=False,
+                ):
+                    for section in subject_sections:
+                        attempts = int(section["attempts"])
+                        correct = int(section["correct_attempts"])
+                        answered = int(section["answered_questions"])
+                        total_questions = int(section["question_count"])
+                        accuracy = correct / attempts if attempts else 0.0
+                        coverage = (
+                            answered / total_questions
+                            if total_questions
+                            else 0.0
                         )
-                    )
-                    copy.progress(
-                        coverage,
-                        text=f"题库探索进度 {answered}/{total_questions}",
-                    )
-                    if action.button(
-                        "开始探索",
-                        key=f"bank_start_{section['id']}",
-                        type="primary",
-                        width="stretch",
-                    ):
-                        _go_learning(str(section["id"]))
-                        st.rerun()
-                    st.divider()
+                        copy, action = st.columns(
+                            [4, 1.2],
+                            vertical_alignment="center",
+                        )
+                        copy.markdown(
+                            f"**{section['title']}**　{_section_rank(section)}"
+                        )
+                        phase_label = phase_names.get(
+                            str(section["phase"]),
+                            str(section["phase"]),
+                        )
+                        copy.caption(
+                            f"{phase_label} · {total_questions} 题"
+                            + (
+                                f" · 已答 {answered} 题 · 正确率 {accuracy:.0%}"
+                                if attempts
+                                else " · 尚未开始"
+                            )
+                        )
+                        copy.progress(
+                            coverage,
+                            text=f"题库探索进度 {answered}/{total_questions}",
+                        )
+                        if action.button(
+                            "开始探索",
+                            key=f"bank_start_{section['id']}",
+                            type="primary",
+                            width="stretch",
+                        ):
+                            _go_learning(str(section["id"]))
+                            st.rerun()
+                        st.divider()
 
     with st.popover("AI 设置"):
         tutor = AITutor()
@@ -831,9 +852,13 @@ def _render_bank_summary(session: dict[str, Any]) -> None:
 def _render_bank_question(session: dict[str, Any]) -> None:
     question = session["questions"][session["index"]]
     feedback = session["feedback"].get(question["id"])
+    question_label = (
+        question.get("source_question_label")
+        or f"第 {question['question_number']} 题"
+    )
     st.caption(
         f"{question['section_title']} · "
-        f"第 {question['question_number']} 题"
+        f"{question_label}"
     )
     st.progress(
         len(session["results"]) / len(session["questions"]),
@@ -890,6 +915,11 @@ def _render_bank_question(session: dict[str, Any]) -> None:
             st.markdown(f"**识别到的答案：** {question['answer_text']}")
         for path in question["answer_images"]:
             st.image(str(BASE_DIR / path), width="stretch")
+        if not question["answer_text"] and not question["answer_images"]:
+            st.info(
+                "解析册中未检出这道题的对应解析。你仍可以点击“请教噜噜”，"
+                "让噜噜围绕当前题目继续讲解。"
+            )
 
     if not feedback and st.session_state.get(awaiting_key):
         left, right = st.columns(2)
