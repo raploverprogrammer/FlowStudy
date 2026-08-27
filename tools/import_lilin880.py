@@ -178,6 +178,8 @@ def build_sections(workbooks: Iterable[Path], answer_pages: int) -> list[Section
                 current_title = re.sub(r"^第.+?章", "", value)
             elif level == 3 and value in PHASES:
                 phase = PHASES[value]
+                if phase == "extension":
+                    continue
                 raw.append(
                     {
                         "subject": subject,
