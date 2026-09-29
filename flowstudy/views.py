@@ -39,6 +39,8 @@ from flowstudy.database import (
     finalize_ai_tutor_attempts,
     finish_tutor_session,
     choose_question_bank_questions,
+    choose_daily_question,
+    get_question_knowledge,
     get_ai_tutor_attempts,
     get_concept_learning_context,
     get_concept_mastery,
@@ -55,6 +57,8 @@ from flowstudy.database import (
     record_ai_tutor_attempt,
     record_attempt,
     record_question_bank_attempt,
+    start_daily_session,
+    update_daily_session,
     resolve_wrong_question,
     save_favorite_reflection,
     save_question_dialogue_summary,
@@ -64,6 +68,7 @@ from flowstudy.database import (
     update_tutor_context,
 )
 from flowstudy.media import render_cropped_video
+from flowstudy.react_agent import advance_repair, finish_repair, start_repair
 from services.ai_service import AIServiceError, AITutor
 
 
@@ -102,6 +107,11 @@ def _go_learning(concept_key: str | None = None) -> None:
     st.session_state.pop("growth_reward", None)
     if concept_key:
         st.session_state["requested_section_id"] = concept_key
+
+
+def _go_daily() -> None:
+    st.session_state["app_view"] = "daily"
+    st.session_state.pop("daily_session", None)
 
 
 def _resume_learning(session_id: int) -> None:
@@ -217,6 +227,18 @@ def render_home() -> None:
         unsafe_allow_html=True,
     )
     _render_growth_tree(show_title=False)
+
+    with st.container(border=True):
+        st.markdown("### 每日一题")
+        st.caption(
+            "从错题或掌握较弱的章节中抽取一道题。答错后，噜噜会启动有限的知识补全流程。"
+        )
+        st.button(
+            "开始每日一题",
+            type="primary",
+            width="stretch",
+            on_click=_go_daily,
+        )
 
     explore_copy = _render_ocean_hero(
         "home",
@@ -955,6 +977,330 @@ def _render_bank_question(session: dict[str, Any]) -> None:
                 session["index"] += 1
             st.session_state["bank_session"] = session
             st.rerun()
+
+
+def _persist_daily(session: dict[str, Any], status: str | None = None) -> None:
+    session_status = status or session.get("mode", "active")
+    update_daily_session(
+        int(session["daily_session_id"]),
+        status=session_status,
+        context=session,
+        report=session.get("report"),
+    )
+
+
+def _daily_question_widget(question: dict[str, Any], key_prefix: str) -> str:
+    answer_key = f"{key_prefix}_{question['id']}"
+    if question["question_type"] == "choice" or question["answer_choice"]:
+        selected = st.radio(
+            "选择答案",
+            ["A", "B", "C", "D"],
+            index=None,
+            horizontal=True,
+            key=answer_key,
+        )
+        return selected or ""
+    return st.text_area(
+        "写下你的答案或思路",
+        key=answer_key,
+        placeholder="先独立思考，再提交。",
+    )
+
+
+def _render_daily_question_media(question: dict[str, Any]) -> None:
+    for path in question.get("question_images", []):
+        st.image(str(BASE_DIR / path), width="stretch")
+
+
+def _render_daily_answer_media(question: dict[str, Any]) -> None:
+    if question.get("answer_text"):
+        st.markdown(f"**识别到的答案：** {question['answer_text']}")
+    for path in question.get("answer_images", []):
+        st.image(str(BASE_DIR / path), width="stretch")
+    if not question.get("answer_text") and not question.get("answer_images"):
+        st.info("题库暂未检出对应解析图片，可以在下方请教噜噜。")
+
+
+def _daily_record_initial(
+    session: dict[str, Any],
+    question: dict[str, Any],
+    user_answer: str,
+    is_correct: bool,
+) -> None:
+    record_question_bank_attempt(question, user_answer, is_correct, "daily")
+    session["initial_answer"] = user_answer
+    session["initial_correct"] = bool(is_correct)
+    session["last_result"] = bool(is_correct)
+    if is_correct:
+        session["mode"] = "correct"
+    else:
+        repair = start_repair(
+            daily_session_id=int(session["daily_session_id"]),
+            original_question=question,
+            original_user_answer=user_answer,
+            asked_ids=list(session.get("asked_ids", [])),
+        )
+        session["repair"] = repair
+        session["mode"] = repair["status"]
+    _persist_daily(session)
+
+
+def _render_daily_initial(session: dict[str, Any]) -> None:
+    question = session["question"]
+    label = question.get("source_question_label") or f"第 {question['question_number']} 题"
+    st.caption(f"{question['section_title']} · {label}")
+    st.progress(0.0, text="今日一题")
+    _render_daily_question_media(question)
+
+    pending = session.get("pending_answer")
+    if not pending:
+        user_answer = _daily_question_widget(question, "daily_answer")
+        if st.button("提交答案", type="primary", key="daily_submit"):
+            if not user_answer.strip():
+                st.warning("先写下答案或思路。")
+            elif question["auto_gradable"] and (
+                question["answer_choice"] or question["answer_text"]
+            ):
+                expected = question["answer_choice"] or question["answer_text"]
+                is_correct = _normal_answer(user_answer) == _normal_answer(expected)
+                _daily_record_initial(session, question, user_answer, is_correct)
+                st.rerun()
+            else:
+                session["pending_answer"] = user_answer
+                _persist_daily(session)
+                st.rerun()
+    else:
+        st.markdown("### 参考答案与解析")
+        _render_daily_answer_media(question)
+        left, right = st.columns(2)
+        if left.button("我答对了", key="daily_self_right", width="stretch"):
+            _daily_record_initial(session, question, str(pending), True)
+            session.pop("pending_answer", None)
+            st.rerun()
+        if right.button("还需复习", key="daily_self_wrong", width="stretch"):
+            _daily_record_initial(session, question, str(pending), False)
+            session.pop("pending_answer", None)
+            st.rerun()
+
+
+def _render_daily_correct(session: dict[str, Any]) -> None:
+    st.image(str(LULU_CORRECT_IMAGE), width=150)
+    st.success("回答正确")
+    st.markdown("这一题已经记录到你的学习档案。你可以结束今天的练习，也可以再来一道。")
+    left, right = st.columns(2)
+    if left.button("再来一道", type="primary", key="daily_next"):
+        question = choose_daily_question(list(session.get("asked_ids", [])))
+        if question:
+            session["question"] = question
+            session["asked_ids"] = [*session.get("asked_ids", []), question["id"]]
+            session["mode"] = "question"
+            session.pop("pending_answer", None)
+            session.pop("initial_answer", None)
+            session.pop("initial_correct", None)
+            _persist_daily(session)
+            st.rerun()
+        st.info("当前没有找到新的每日题，今天先到这里。")
+    if right.button("结束今日练习", key="daily_finish"):
+        _persist_daily(session, "complete")
+        st.session_state.pop("daily_session", None)
+        st.session_state["app_view"] = "home"
+        st.rerun()
+
+
+def _advance_daily_repair(
+    session: dict[str, Any],
+    support_question: dict[str, Any],
+    user_answer: str,
+    is_correct: bool,
+) -> None:
+    record_question_bank_attempt(
+        support_question,
+        user_answer,
+        is_correct,
+        "react_support",
+    )
+    repair = advance_repair(
+        state=session["repair"],
+        support_question=support_question,
+        user_answer=user_answer,
+        is_correct=is_correct,
+    )
+    session["repair"] = repair
+    session["mode"] = repair["status"]
+    session["asked_ids"] = repair.get("asked_ids", session.get("asked_ids", []))
+    _persist_daily(session)
+
+
+def _render_daily_repair_question(session: dict[str, Any]) -> None:
+    repair = session["repair"]
+    question = repair.get("current_question")
+    st.info(repair.get("message") or "噜噜正在安排一道人知识补充题。")
+    st.caption(f"当前补充题：{question['section_title']}")
+    _render_daily_question_media(question)
+    pending = session.get("repair_pending_answer")
+    if not pending:
+        user_answer = _daily_question_widget(question, "daily_repair_answer")
+        if st.button("提交补充题", type="primary", key="daily_repair_submit"):
+            if not user_answer.strip():
+                st.warning("先写下答案或思路。")
+            elif question["auto_gradable"] and (
+                question["answer_choice"] or question["answer_text"]
+            ):
+                expected = question["answer_choice"] or question["answer_text"]
+                is_correct = _normal_answer(user_answer) == _normal_answer(expected)
+                _advance_daily_repair(session, question, user_answer, is_correct)
+                st.rerun()
+            else:
+                session["repair_pending_answer"] = user_answer
+                _persist_daily(session)
+                st.rerun()
+    else:
+        st.markdown("### 参考答案与解析")
+        _render_daily_answer_media(question)
+        left, right = st.columns(2)
+        if left.button("补充题答对了", key="daily_repair_right", width="stretch"):
+            _advance_daily_repair(session, question, str(pending), True)
+            session.pop("repair_pending_answer", None)
+            st.rerun()
+        if right.button("补充题仍需复习", key="daily_repair_wrong", width="stretch"):
+            _advance_daily_repair(session, question, str(pending), False)
+            session.pop("repair_pending_answer", None)
+            st.rerun()
+
+
+def _render_daily_original_retest(session: dict[str, Any]) -> None:
+    repair = session["repair"]
+    question = session["question"]
+    st.info(repair.get("message") or "补充练习完成，现在回到原题验证。")
+    st.markdown("### 回到原题")
+    _render_daily_question_media(question)
+    pending = session.get("retest_pending_answer")
+    if not pending:
+        user_answer = _daily_question_widget(question, "daily_retest_answer")
+        if st.button("提交原题验证", type="primary", key="daily_retest_submit"):
+            if not user_answer.strip():
+                st.warning("先写下答案或思路。")
+            elif question["auto_gradable"] and (
+                question["answer_choice"] or question["answer_text"]
+            ):
+                expected = question["answer_choice"] or question["answer_text"]
+                is_correct = _normal_answer(user_answer) == _normal_answer(expected)
+                _finish_daily_repair(session, user_answer, is_correct)
+                st.rerun()
+            else:
+                session["retest_pending_answer"] = user_answer
+                _persist_daily(session)
+                st.rerun()
+    else:
+        st.markdown("### 参考答案与解析")
+        _render_daily_answer_media(question)
+        left, right = st.columns(2)
+        if left.button("原题已经弄明白", key="daily_retest_right", width="stretch"):
+            _finish_daily_repair(session, str(pending), True)
+            session.pop("retest_pending_answer", None)
+            st.rerun()
+        if right.button("原题仍需复习", key="daily_retest_wrong", width="stretch"):
+            _finish_daily_repair(session, str(pending), False)
+            session.pop("retest_pending_answer", None)
+            st.rerun()
+
+
+def _finish_daily_repair(
+    session: dict[str, Any],
+    user_answer: str,
+    is_correct: bool,
+) -> None:
+    question = session["question"]
+    record_question_bank_attempt(question, user_answer, is_correct, "react_retest")
+    if is_correct:
+        resolve_wrong_question(question["id"])
+    report = finish_repair(
+        state=session["repair"],
+        original_retest_correct=is_correct,
+    )
+    session["report"] = report
+    session["mode"] = "report"
+    session.pop("retest_pending_answer", None)
+    _persist_daily(session, "complete")
+    summary = {
+        "content": f"## {report['title']}\n\n{report['content']}\n\n**下一步建议**\n{report['next_suggestion']}",
+        "mastered": report["content"] if is_correct else "",
+        "mistakes": session["repair"].get("gap", ""),
+        "insight": report["content"],
+        "next_suggestion": report["next_suggestion"],
+        "review_focus": question["section_title"],
+        "rating": "",
+    }
+    session["summary_id"] = save_question_dialogue_summary(
+        summary,
+        question.get("question_images", []),
+    )
+
+
+def _render_daily_report(session: dict[str, Any]) -> None:
+    report = session.get("report", {})
+    st.markdown("## 本次知识补全报告")
+    st.markdown(report.get("content", "本次补课已经结束。"))
+    st.markdown(f"**下一步建议：** {report.get('next_suggestion', '继续复习本题所属章节。')}")
+    summary_id = session.get("summary_id")
+    if summary_id:
+        summary = get_summary(int(summary_id))
+        if summary:
+            favorite = st.toggle(
+                "收藏这份报告",
+                value=bool(summary["favorited"]),
+                key=f"daily_report_favorite_{summary_id}",
+            )
+            if favorite != bool(summary["favorited"]):
+                set_summary_favorite(int(summary_id), favorite)
+                st.toast("已收藏" if favorite else "已取消收藏")
+    if st.button("返回首页", type="primary", key="daily_report_home"):
+        st.session_state.pop("daily_session", None)
+        st.session_state["app_view"] = "home"
+        st.rerun()
+
+
+def render_daily() -> None:
+    if st.button("← 返回首页", key="daily_back_home"):
+        st.session_state.pop("daily_session", None)
+        _go_home()
+        st.rerun()
+
+    session = st.session_state.get("daily_session")
+    if not session:
+        question = choose_daily_question()
+        if not question:
+            st.error("固定题库中暂时没有可用题目。")
+            return
+        session = {
+            "mode": "question",
+            "question": question,
+            "asked_ids": [question["id"]],
+            "daily_session_id": start_daily_session(
+                question["id"],
+                {"mode": "question", "question_id": question["id"]},
+            ),
+        }
+        st.session_state["daily_session"] = session
+
+    _render_ocean_hero(
+        "daily",
+        LULU_LEARNING_SCENE,
+        "每日一题",
+        "今天先解决一个真正的漏洞",
+        "答错后，噜噜会根据你的学习记录安排有限的知识补全。",
+    )
+    mode = session.get("mode")
+    if mode == "question":
+        _render_daily_initial(session)
+    elif mode == "correct":
+        _render_daily_correct(session)
+    elif mode == "repair":
+        _render_daily_repair_question(session)
+    elif mode == "original_retest":
+        _render_daily_original_retest(session)
+    elif mode == "report":
+        _render_daily_report(session)
 
 
 def render_learning() -> None:

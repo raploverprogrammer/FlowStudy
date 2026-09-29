@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
@@ -187,6 +188,67 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_question_bank_section
             ON question_bank(section_id, question_number);
+
+            CREATE TABLE IF NOT EXISTS knowledge_nodes (
+                id TEXT PRIMARY KEY,
+                subject TEXT NOT NULL,
+                chapter_number INTEGER NOT NULL,
+                phase TEXT NOT NULL,
+                title TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'section_fallback',
+                confidence REAL NOT NULL DEFAULT 0.55,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS question_knowledge (
+                question_id TEXT NOT NULL,
+                knowledge_id TEXT NOT NULL,
+                relation TEXT NOT NULL DEFAULT 'primary',
+                confidence REAL NOT NULL DEFAULT 0.55,
+                source TEXT NOT NULL DEFAULT 'section_fallback',
+                PRIMARY KEY(question_id, knowledge_id),
+                FOREIGN KEY(question_id) REFERENCES question_bank(id),
+                FOREIGN KEY(knowledge_id) REFERENCES knowledge_nodes(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_question_knowledge_node
+            ON question_knowledge(knowledge_id);
+
+            CREATE TABLE IF NOT EXISTS daily_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                original_question_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                context_json TEXT NOT NULL DEFAULT '{}',
+                report_json TEXT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS react_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                daily_session_id INTEGER,
+                original_question_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                step_count INTEGER NOT NULL DEFAULT 0,
+                context_json TEXT NOT NULL DEFAULT '{}',
+                report_json TEXT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                FOREIGN KEY(daily_session_id) REFERENCES daily_sessions(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS react_steps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                step_number INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                observation_json TEXT NOT NULL DEFAULT '{}',
+                tool_name TEXT NOT NULL DEFAULT '',
+                tool_input_json TEXT NOT NULL DEFAULT '{}',
+                tool_output_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES react_runs(id)
+            );
             """
         )
 
@@ -222,6 +284,7 @@ def init_db() -> None:
             for name, definition in fields.items():
                 _add_column(conn, table, name, definition)
         _seed_concept_mastery(conn)
+        _seed_question_knowledge(conn)
         current_ids = {concept["id"] for concept in get_concepts()}
         placeholders = ",".join("?" for _ in current_ids)
         conn.execute(
@@ -235,6 +298,57 @@ def init_db() -> None:
                 datetime.now().isoformat(timespec="seconds"),
                 *sorted(current_ids),
             ),
+        )
+
+
+def _seed_question_knowledge(conn: sqlite3.Connection) -> None:
+    """Attach every imported question to a reliable section-level concept.
+
+    OCR quality varies across the scanned books, so the first tagging pass uses
+    the importer-owned subject/chapter/phase metadata as a safe fallback. More
+    specific tags can be added later without changing the question bank.
+    """
+    now = datetime.now().isoformat(timespec="seconds")
+    sections = conn.execute(
+        """
+        SELECT id, subject, chapter_number, phase, title, source
+        FROM question_bank_sections
+        """
+    ).fetchall()
+    for section in sections:
+        knowledge_id = f"section:{section['id']}"
+        conn.execute(
+            """
+            INSERT INTO knowledge_nodes(
+                id, subject, chapter_number, phase, title,
+                source, confidence, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'section_fallback', 0.55, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                subject = excluded.subject,
+                chapter_number = excluded.chapter_number,
+                phase = excluded.phase,
+                title = excluded.title,
+                updated_at = excluded.updated_at
+            """,
+            (
+                knowledge_id,
+                section["subject"],
+                section["chapter_number"],
+                section["phase"],
+                section["title"],
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO question_knowledge(
+                question_id, knowledge_id, relation, confidence, source
+            )
+            SELECT id, ?, 'primary', 0.55, 'section_fallback'
+            FROM question_bank
+            WHERE section_id = ?
+            """,
+            (knowledge_id, section["id"]),
         )
 
 
@@ -1216,6 +1330,300 @@ def get_question_bank_question(question_id: str) -> dict[str, Any] | None:
     return _bank_question(row) if row else None
 
 
+def get_question_knowledge(question_id: str) -> list[dict[str, Any]]:
+    with connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT n.id, n.subject, n.chapter_number, n.phase, n.title,
+                   n.source, n.confidence, qk.relation, qk.confidence AS tag_confidence
+            FROM question_knowledge qk
+            JOIN knowledge_nodes n ON n.id = qk.knowledge_id
+            WHERE qk.question_id = ?
+            ORDER BY CASE qk.relation WHEN 'primary' THEN 1 ELSE 2 END,
+                     qk.confidence DESC
+            """,
+            (question_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_section_mastery(section_id: str) -> dict[str, Any]:
+    with connection() as conn:
+        row = conn.execute(
+            """
+            SELECT s.id, s.subject, s.chapter_number, s.phase, s.title,
+                   s.question_count,
+                   COUNT(a.id) AS attempts,
+                   COALESCE(SUM(a.is_correct), 0) AS correct_attempts,
+                   COUNT(DISTINCT a.question_id) AS answered_questions
+            FROM question_bank_sections s
+            LEFT JOIN quiz_attempts a ON a.topic_id = s.id
+            WHERE s.id = ?
+            GROUP BY s.id
+            """,
+            (section_id,),
+        ).fetchone()
+    if not row:
+        return {}
+    value = dict(row)
+    attempts = int(value["attempts"])
+    value["accuracy"] = (
+        int(value["correct_attempts"]) / attempts if attempts else 0.0
+    )
+    value["coverage"] = (
+        int(value["answered_questions"]) / int(value["question_count"])
+        if int(value["question_count"])
+        else 0.0
+    )
+    return value
+
+
+def choose_daily_question(exclude_ids: list[str] | None = None) -> dict[str, Any] | None:
+    """Choose one question from all subjects using learning evidence.
+
+    Unresolved wrong questions win. Otherwise, select a low-accuracy section
+    and prefer unseen questions. The returned question is always from the
+    fixed bank; no model is involved in question generation.
+    """
+    excluded = set(exclude_ids or [])
+    with connection() as conn:
+        wrong_rows = conn.execute(
+            """
+            SELECT q.id
+            FROM wrong_questions w
+            JOIN question_bank q ON q.id = w.question_id
+            JOIN question_bank_sections s ON s.id = q.section_id
+            WHERE w.resolved = 0
+            ORDER BY w.wrong_count DESC, w.last_wrong_at ASC
+            """
+        ).fetchall()
+        wrong_ids = [str(row["id"]) for row in wrong_rows if row["id"] not in excluded]
+        if wrong_ids:
+            chosen = random.choice(wrong_ids)
+            return get_question_bank_question(chosen)
+
+        section_rows = conn.execute(
+            """
+            SELECT s.id,
+                   COUNT(a.id) AS attempts,
+                   COALESCE(SUM(a.is_correct), 0) AS correct_attempts
+            FROM question_bank_sections s
+            LEFT JOIN quiz_attempts a ON a.topic_id = s.id
+            GROUP BY s.id
+            ORDER BY
+                CASE WHEN COUNT(a.id) = 0 THEN 0 ELSE 1 END,
+                CASE WHEN COUNT(a.id) = 0 THEN 0
+                     ELSE COALESCE(SUM(a.is_correct), 0) * 1.0 / COUNT(a.id)
+                END,
+                RANDOM()
+            """
+        ).fetchall()
+        excluded_clause = (
+            f"AND q.id NOT IN ({', '.join('?' for _ in excluded)})"
+            if excluded
+            else ""
+        )
+        for section in section_rows:
+            rows = conn.execute(
+                f"""
+                SELECT q.*, s.title AS section_title, s.phase, s.subject,
+                       s.source, s.source_label,
+                       CASE WHEN EXISTS(
+                           SELECT 1 FROM quiz_attempts a
+                           WHERE a.question_id = q.id
+                       ) THEN 1 ELSE 0 END AS seen
+                FROM question_bank q
+                JOIN question_bank_sections s ON s.id = q.section_id
+                WHERE q.section_id = ?
+                  {excluded_clause}
+                ORDER BY seen, RANDOM()
+                LIMIT 1
+                """,
+                (section["id"], *excluded),
+            ).fetchall()
+            if rows:
+                return _bank_question(rows[0])
+    return None
+
+
+def choose_repair_questions(
+    section_id: str,
+    exclude_ids: list[str] | None = None,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Return fixed-bank candidates for a bounded repair step.
+
+    Comprehensive questions prefer a foundation section from the same
+    subject/chapter. Otherwise the current section is used.
+    """
+    excluded = set(exclude_ids or [])
+    with connection() as conn:
+        section = conn.execute(
+            "SELECT subject, chapter_number, phase FROM question_bank_sections WHERE id = ?",
+            (section_id,),
+        ).fetchone()
+        if not section:
+            return []
+        target_phases = (
+            ("foundation", "comprehensive")
+            if section["phase"] == "comprehensive"
+            else (section["phase"], "foundation", "comprehensive")
+        )
+        phase_placeholders = ", ".join("?" for _ in target_phases)
+        excluded_clause = (
+            f"AND q.id NOT IN ({', '.join('?' for _ in excluded)})"
+            if excluded
+            else ""
+        )
+        rows = conn.execute(
+            f"""
+            SELECT q.*, s.title AS section_title, s.phase, s.subject,
+                   s.source, s.source_label,
+                   CASE WHEN EXISTS(
+                       SELECT 1 FROM quiz_attempts a WHERE a.question_id = q.id
+                   ) THEN 1 ELSE 0 END AS seen
+            FROM question_bank q
+            JOIN question_bank_sections s ON s.id = q.section_id
+            WHERE s.subject = ?
+              AND s.chapter_number = ?
+              AND s.phase IN ({phase_placeholders})
+              {excluded_clause}
+            ORDER BY CASE s.phase WHEN 'foundation' THEN 1 ELSE 2 END,
+                     seen, RANDOM()
+            LIMIT ?
+            """,
+            (
+                section["subject"],
+                section["chapter_number"],
+                *target_phases,
+                *excluded,
+                limit,
+            ),
+        ).fetchall()
+    return [_bank_question(row) for row in rows]
+
+
+def start_daily_session(question_id: str, context: dict[str, Any]) -> int:
+    now = datetime.now().isoformat(timespec="seconds")
+    with connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO daily_sessions(
+                original_question_id, status, context_json, started_at
+            ) VALUES (?, 'active', ?, ?)
+            """,
+            (question_id, json.dumps(context, ensure_ascii=False), now),
+        )
+    return int(cursor.lastrowid)
+
+
+def update_daily_session(
+    session_id: int,
+    *,
+    status: str,
+    context: dict[str, Any],
+    report: dict[str, Any] | None = None,
+) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    with connection() as conn:
+        conn.execute(
+            """
+            UPDATE daily_sessions
+            SET status = ?, context_json = ?, report_json = ?,
+                finished_at = CASE WHEN ? IN ('complete', 'abandoned')
+                                   THEN ? ELSE finished_at END
+            WHERE id = ?
+            """,
+            (
+                status,
+                json.dumps(context, ensure_ascii=False),
+                json.dumps(report, ensure_ascii=False) if report else None,
+                status,
+                now,
+                session_id,
+            ),
+        )
+
+
+def start_react_run(
+    daily_session_id: int,
+    original_question_id: str,
+    context: dict[str, Any],
+) -> int:
+    now = datetime.now().isoformat(timespec="seconds")
+    with connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO react_runs(
+                daily_session_id, original_question_id, context_json, started_at
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (
+                daily_session_id,
+                original_question_id,
+                json.dumps(context, ensure_ascii=False),
+                now,
+            ),
+        )
+    return int(cursor.lastrowid)
+
+
+def record_react_step(
+    run_id: int,
+    step_number: int,
+    action: str,
+    observation: dict[str, Any],
+    tool_name: str,
+    tool_input: dict[str, Any],
+    tool_output: dict[str, Any],
+) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    with connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO react_steps(
+                run_id, step_number, action, observation_json,
+                tool_name, tool_input_json, tool_output_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                step_number,
+                action,
+                json.dumps(observation, ensure_ascii=False),
+                tool_name,
+                json.dumps(tool_input, ensure_ascii=False),
+                json.dumps(tool_output, ensure_ascii=False),
+                now,
+            ),
+        )
+        conn.execute(
+            "UPDATE react_runs SET step_count = ? WHERE id = ?",
+            (step_number, run_id),
+        )
+
+
+def finish_react_run(
+    run_id: int,
+    status: str,
+    report: dict[str, Any] | None = None,
+) -> None:
+    with connection() as conn:
+        conn.execute(
+            """
+            UPDATE react_runs
+            SET status = ?, report_json = ?, finished_at = ?
+            WHERE id = ?
+            """,
+            (
+                status,
+                json.dumps(report, ensure_ascii=False) if report else None,
+                datetime.now().isoformat(timespec="seconds"),
+                run_id,
+            ),
+        )
+
+
 def choose_question_bank_questions(
     section_id: str,
     limit: int = 5,
@@ -1244,6 +1652,7 @@ def record_question_bank_attempt(
     question: dict[str, Any],
     user_answer: str,
     is_correct: bool,
+    attempt_type: str = "question_bank",
 ) -> None:
     now = datetime.now().isoformat(timespec="seconds")
     snapshot = {
@@ -1267,7 +1676,7 @@ def record_question_bank_attempt(
             INSERT INTO quiz_attempts(
                 question_id, day, knowledge_point, selected_answer,
                 is_correct, attempted_at, topic_id, attempt_type, question_json
-            ) VALUES (?, 0, ?, ?, ?, ?, ?, 'question_bank', ?)
+            ) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 question["id"],
@@ -1276,6 +1685,7 @@ def record_question_bank_attempt(
                 int(is_correct),
                 now,
                 question["section_id"],
+                attempt_type,
                 question_json,
             ),
         )

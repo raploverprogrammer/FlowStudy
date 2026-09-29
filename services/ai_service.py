@@ -487,6 +487,121 @@ class AITutor:
             "content": content,
         }
 
+    def decide_repair_action(
+        self,
+        *,
+        observation: dict[str, Any],
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Choose one bounded repair action from real question candidates."""
+        candidate_payload = [
+            {
+                "id": item["id"],
+                "section_id": item["section_id"],
+                "section_title": item["section_title"],
+                "phase": item["phase"],
+                "question_number": item["question_number"],
+                "question_text": str(item.get("question_text", ""))[:700],
+            }
+            for item in candidates
+        ]
+        payload = {
+            "observation": observation,
+            "candidate_questions": candidate_payload,
+            "allowed_actions": [
+                "practice_same_section",
+                "practice_prerequisite",
+                "verify_original",
+                "finish",
+            ],
+            "requirements": [
+                "只能从 candidate_questions 中选择 question_id",
+                "不能生成新题，不能修改题库答案",
+                "补课最多三道题；达到上限必须 verify_original 或 finish",
+                "答错后优先巩固当前章节或基础阶段，答对后优先回到原题验证",
+                "用一句简短中文说明给用户，不输出隐藏思维过程",
+            ],
+            "output_schema": {
+                "action": "practice_same_section|practice_prerequisite|verify_original|finish",
+                "question_id": "候选题 id；不需要题目时为 null",
+                "gap": "当前最可能的漏洞",
+                "user_message": "给用户看的简短说明",
+            },
+        }
+        data = self._json_completion(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是 FlowStudy 的学习诊断 Agent。"
+                        "你通过有限的工具观察结果安排补课，不直接生成题目。"
+                    ),
+                },
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            temperature=0.1,
+            max_tokens=500,
+        )
+        action = str(data.get("action", "verify_original"))
+        allowed = {
+            "practice_same_section",
+            "practice_prerequisite",
+            "verify_original",
+            "finish",
+        }
+        if action not in allowed:
+            action = "verify_original"
+        question_id = data.get("question_id")
+        candidate_ids = {item["id"] for item in candidates}
+        if question_id not in candidate_ids:
+            question_id = None
+        if action in {"practice_same_section", "practice_prerequisite"} and not question_id:
+            action = "verify_original"
+        return {
+            "action": action,
+            "question_id": question_id,
+            "gap": str(data.get("gap", "需要进一步确认当前知识点。")),
+            "user_message": str(
+                data.get("user_message", "先做一道相关题，再回到原题验证。")
+            ),
+        }
+
+    def generate_repair_report(self, facts: dict[str, Any]) -> dict[str, str]:
+        """Turn verified repair facts into a concise learner-facing report."""
+        payload = {
+            "facts": facts,
+            "requirements": [
+                "只依据 facts 总结，不虚构用户能力",
+                "指出原题漏洞、补过的知识点和是否修复",
+                "给出一条下一次复习建议",
+                "使用简体中文，控制在 400 字以内",
+            ],
+            "output_schema": {
+                "title": "本次知识补全报告",
+                "content": "报告正文",
+                "next_suggestion": "下一次建议",
+            },
+        }
+        data = self._json_completion(
+            [
+                {
+                    "role": "system",
+                    "content": "你是 FlowStudy 的学习总结助手，只能总结已经发生的补课事实。",
+                },
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            temperature=0.2,
+            max_tokens=700,
+        )
+        title = str(data.get("title", "本次知识补全报告"))
+        content = str(data.get("content", "本次补课已完成。"))
+        next_suggestion = str(data.get("next_suggestion", "下次优先复习本题相关章节。"))
+        return {
+            "title": title,
+            "content": content,
+            "next_suggestion": next_suggestion,
+        }
+
     @staticmethod
     def rating_for_score(correct_count: int) -> str:
         return {

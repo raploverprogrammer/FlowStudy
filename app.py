@@ -7,6 +7,7 @@ from flowstudy.database import init_db
 from flowstudy.pet import render_lulu_pet
 from flowstudy.styles import apply_styles
 from flowstudy.views import (
+    render_daily,
     render_home,
     render_favorites,
     render_learning,
@@ -27,12 +28,14 @@ apply_styles()
 
 PAGES = {
     "home": render_home,
+    "daily": render_daily,
     "learning": render_learning,
     "reefs": render_wrong_book,
     "treasures": render_favorites,
 }
 LEGACY_PAGES = {
     "首页": "home",
+    "每日一题": "daily",
     "学习": "learning",
     "知识航线": "learning",
     "错题记录": "reefs",
