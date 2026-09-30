@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import flowstudy.database as database
 import flowstudy.react_agent as react_agent
+from flowstudy.knowledge_catalog import nodes_for_section
 
 
 class AdaptiveFlowTests(unittest.TestCase):
@@ -58,6 +59,45 @@ class AdaptiveFlowTests(unittest.TestCase):
         tags = database.get_question_knowledge(question["id"])
         self.assertEqual(len(tags), 1)
         self.assertEqual(tags[0]["relation"], "primary")
+
+    def test_catalog_has_prerequisites_and_specific_tags_keep_fallback(self) -> None:
+        with database.connection() as conn:
+            catalog_count = conn.execute(
+                "SELECT COUNT(*) FROM knowledge_nodes WHERE source = 'curated'"
+            ).fetchone()[0]
+            prerequisite_count = conn.execute(
+                "SELECT COUNT(*) FROM knowledge_prerequisites"
+            ).fetchone()[0]
+        self.assertGreater(catalog_count, 40)
+        self.assertGreater(prerequisite_count, 20)
+
+        question = database.get_question_bank_question("comprehensive-calculus-01-q001")
+        self.assertIsNotNone(question)
+        database.save_question_knowledge(
+            question["id"],
+            [
+                {
+                    "knowledge_id": "kp:calculus:derivative-definition",
+                    "relation": "direct",
+                    "confidence": 0.9,
+                    "source": "test",
+                }
+            ],
+        )
+        tags = database.get_question_knowledge(question["id"])
+        self.assertEqual(tags[0]["relation"], "direct")
+        self.assertEqual(tags[0]["tag_source"], "test")
+        self.assertTrue(any(tag["source"] == "section_fallback" for tag in tags))
+
+    def test_section_title_overrides_conflicting_book_chapter_numbers(self) -> None:
+        nodes = nodes_for_section(
+            "calculus",
+            3,
+            "第3章 一元函数积分学及其应用 · 综合题",
+        )
+        titles = {node["title"] for node in nodes}
+        self.assertIn("一元函数积分学的计算", titles)
+        self.assertNotIn("中值定理", titles)
 
     def test_daily_question_and_repair_candidates_use_fixed_bank(self) -> None:
         question = database.choose_daily_question()

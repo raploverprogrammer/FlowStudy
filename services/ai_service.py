@@ -63,6 +63,8 @@ class AITutor:
                     "HTTP-Referer": "http://localhost:8501",
                     "X-Title": "FlowStudy",
                 },
+                timeout=45.0,
+                max_retries=0,
             )
 
     @property
@@ -565,6 +567,119 @@ class AITutor:
                 data.get("user_message", "先做一道相关题，再回到原题验证。")
             ),
         }
+
+    def classify_question_batch(
+        self,
+        *,
+        questions: list[dict[str, Any]],
+        candidate_nodes: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Classify fixed-bank questions using only curated node candidates."""
+        node_payload = [
+            {
+                "id": node["id"],
+                "title": node["title"],
+                "allowed_relations": node.get("allowed_relations", ["direct"]),
+                "hints": node.get("hints", []),
+            }
+            for node in candidate_nodes
+        ]
+        question_payload = [
+            {
+                "id": question["id"],
+                "section_title": question["section_title"],
+                "subject": question["subject"],
+                "phase": question["phase"],
+                "question_text": str(question.get("question_text", ""))[:1200],
+            }
+            for question in questions
+        ]
+        payload = {
+            "candidate_nodes": node_payload,
+            "questions": question_payload,
+            "requirements": [
+                "每道题最多选择 3 个 direct 知识点和 3 个 prerequisite 知识点",
+                "只能使用 candidate_nodes 中存在的 id",
+                "direct 表示题目直接考查，prerequisite 表示解题需要的前置知识",
+                "OCR 不清楚或题目为综合题时，可以返回空标签",
+                "不要根据题号猜知识点，不要创造候选列表之外的 id",
+            ],
+            "output_schema": {
+                "items": [
+                    {
+                        "question_id": "题目 id",
+                        "direct_knowledge_ids": ["node id"],
+                        "prerequisite_knowledge_ids": ["node id"],
+                        "confidence": 0.0,
+                        "reason": "不超过 30 字的分类依据",
+                    }
+                ]
+            },
+        }
+        data = self._json_completion(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是考研数学题目知识点标注器。"
+                        "你只负责从给定目录中做保守分类，不解题，不补写题目。"
+                    ),
+                },
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            temperature=0.0,
+            max_tokens=1800,
+        )
+        allowed_ids = {str(node["id"]) for node in candidate_nodes}
+        question_ids = {str(question["id"]) for question in questions}
+        normalized: list[dict[str, Any]] = []
+        raw_items = data if isinstance(data, list) else data.get("items", [])
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            question_id = str(item.get("question_id", ""))
+            if question_id not in question_ids:
+                continue
+            direct_ids = [
+                str(value)
+                for value in item.get("direct_knowledge_ids", [])
+                if str(value) in allowed_ids
+            ][:3]
+            prerequisite_ids = [
+                str(value)
+                for value in item.get("prerequisite_knowledge_ids", [])
+                if str(value) in allowed_ids
+            ][:3]
+            tags = [
+                {
+                    "knowledge_id": node_id,
+                    "relation": "direct",
+                    "confidence": item.get("confidence", 0.0),
+                    "source": "ai_classifier",
+                }
+                for node_id in direct_ids
+            ]
+            tags.extend(
+                {
+                    "knowledge_id": node_id,
+                    "relation": "prerequisite",
+                    "confidence": item.get("confidence", 0.0),
+                    "source": "ai_classifier",
+                }
+                for node_id in prerequisite_ids
+                if node_id not in direct_ids
+            )
+            normalized.append(
+                {
+                    "question_id": question_id,
+                    "tags": tags,
+                    "confidence": min(
+                        1.0, max(0.0, float(item.get("confidence", 0.0)))
+                    ),
+                    "reason": str(item.get("reason", ""))[:120],
+                }
+            )
+        return normalized
 
     def generate_repair_report(self, facts: dict[str, Any]) -> dict[str, str]:
         """Turn verified repair facts into a concise learner-facing report."""

@@ -9,6 +9,7 @@ from typing import Any, Iterator
 
 from flowstudy.config import DB_PATH
 from flowstudy.content import concept_for_question, get_concepts, get_topic
+from flowstudy.knowledge_catalog import catalog_nodes
 
 
 @contextmanager
@@ -214,6 +215,16 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_question_knowledge_node
             ON question_knowledge(knowledge_id);
 
+            CREATE TABLE IF NOT EXISTS knowledge_prerequisites (
+                knowledge_id TEXT NOT NULL,
+                prerequisite_id TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 1.0,
+                source TEXT NOT NULL DEFAULT 'curated',
+                PRIMARY KEY(knowledge_id, prerequisite_id),
+                FOREIGN KEY(knowledge_id) REFERENCES knowledge_nodes(id),
+                FOREIGN KEY(prerequisite_id) REFERENCES knowledge_nodes(id)
+            );
+
             CREATE TABLE IF NOT EXISTS daily_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 original_question_id TEXT NOT NULL,
@@ -284,6 +295,7 @@ def init_db() -> None:
             for name, definition in fields.items():
                 _add_column(conn, table, name, definition)
         _seed_concept_mastery(conn)
+        _seed_knowledge_catalog(conn)
         _seed_question_knowledge(conn)
         current_ids = {concept["id"] for concept in get_concepts()}
         placeholders = ",".join("?" for _ in current_ids)
@@ -350,6 +362,44 @@ def _seed_question_knowledge(conn: sqlite3.Connection) -> None:
             """,
             (knowledge_id, section["id"]),
         )
+
+
+def _seed_knowledge_catalog(conn: sqlite3.Connection) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    nodes = catalog_nodes()
+    for node in nodes:
+        conn.execute(
+            """
+            INSERT INTO knowledge_nodes(
+                id, subject, chapter_number, phase, title,
+                source, confidence, updated_at
+            ) VALUES (?, ?, ?, 'catalog', ?, 'curated', 1.0, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                subject = excluded.subject,
+                chapter_number = excluded.chapter_number,
+                title = excluded.title,
+                source = 'curated',
+                confidence = 1.0,
+                updated_at = excluded.updated_at
+            """,
+            (
+                node["id"],
+                node["subject"],
+                node["chapter_number"],
+                node["title"],
+                now,
+            ),
+        )
+    for node in nodes:
+        for prerequisite_id in node["prerequisites"]:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO knowledge_prerequisites(
+                    knowledge_id, prerequisite_id, confidence, source
+                ) VALUES (?, ?, 1.0, 'curated')
+                """,
+                (node["id"], prerequisite_id),
+            )
 
 
 def _seed_concept_mastery(conn: sqlite3.Connection) -> None:
@@ -1345,15 +1395,61 @@ def get_question_knowledge(question_id: str) -> list[dict[str, Any]]:
             """
             SELECT n.id, n.subject, n.chapter_number, n.phase, n.title,
                    n.source, n.confidence, qk.relation, qk.confidence AS tag_confidence
+                   , qk.source AS tag_source
             FROM question_knowledge qk
             JOIN knowledge_nodes n ON n.id = qk.knowledge_id
             WHERE qk.question_id = ?
-            ORDER BY CASE qk.relation WHEN 'primary' THEN 1 ELSE 2 END,
+            ORDER BY CASE qk.relation
+                         WHEN 'direct' THEN 1
+                         WHEN 'prerequisite' THEN 2
+                         WHEN 'primary' THEN 3
+                         ELSE 4
+                     END,
                      qk.confidence DESC
             """,
             (question_id,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def save_question_knowledge(
+    question_id: str,
+    tags: list[dict[str, Any]],
+) -> None:
+    """Replace classifier-owned tags while retaining the chapter fallback."""
+    allowed_relations = {"direct", "prerequisite"}
+    with connection() as conn:
+        valid_nodes = {
+            str(row["id"])
+            for row in conn.execute("SELECT id FROM knowledge_nodes")
+        }
+        conn.execute(
+            """
+            DELETE FROM question_knowledge
+            WHERE question_id = ? AND source != 'section_fallback'
+            """,
+            (question_id,),
+        )
+        for tag in tags:
+            knowledge_id = str(tag.get("knowledge_id", ""))
+            relation = str(tag.get("relation", "direct"))
+            if knowledge_id not in valid_nodes or relation not in allowed_relations:
+                continue
+            confidence = min(1.0, max(0.0, float(tag.get("confidence", 0.0))))
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO question_knowledge(
+                    question_id, knowledge_id, relation, confidence, source
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    question_id,
+                    knowledge_id,
+                    relation,
+                    confidence,
+                    str(tag.get("source", "ai_classifier")),
+                ),
+            )
 
 
 def get_section_mastery(section_id: str) -> dict[str, Any]:
