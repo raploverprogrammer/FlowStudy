@@ -72,27 +72,34 @@ class AdaptiveFlowTests(unittest.TestCase):
         question = database.get_question_bank_question("comprehensive-calculus-01-q001")
         self.assertIsNotNone(question)
         with patch.object(react_agent, "AITutor", _OfflineTutor):
+            progress: list[str] = []
             daily_id = database.start_daily_session(question["id"], {})
             state = react_agent.start_repair(
                 daily_session_id=daily_id,
                 original_question=question,
                 original_user_answer="B",
                 asked_ids=[question["id"]],
+                progress=progress.append,
             )
             self.assertEqual(state["status"], "repair")
+            self.assertIn("正在查询本章节的掌握度和近期答题记录…", progress)
             support = state["current_question"]
             state = react_agent.advance_repair(
                 state=state,
                 support_question=support,
                 user_answer="A",
                 is_correct=True,
+                progress=progress.append,
             )
             self.assertEqual(state["status"], "original_retest")
             report = react_agent.finish_repair(
                 state=state,
                 original_retest_correct=True,
+                progress=progress.append,
             )
             self.assertIn("补充题", report["content"])
+            self.assertIn("正在结合本次结果重新筛选 0 道候选题…", progress)
+            self.assertIn("报告已生成，正在保存到学习记录…", progress)
 
 
 class _OfflineTutor:

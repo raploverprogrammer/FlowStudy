@@ -1034,12 +1034,19 @@ def _daily_record_initial(
     if is_correct:
         session["mode"] = "correct"
     else:
-        repair = start_repair(
-            daily_session_id=int(session["daily_session_id"]),
-            original_question=question,
-            original_user_answer=user_answer,
-            asked_ids=list(session.get("asked_ids", [])),
-        )
+        with st.status("噜噜正在分析这次答错…", expanded=True) as progress_status:
+            repair = start_repair(
+                daily_session_id=int(session["daily_session_id"]),
+                original_question=question,
+                original_user_answer=user_answer,
+                asked_ids=list(session.get("asked_ids", [])),
+                progress=progress_status.write,
+            )
+            progress_status.update(
+                label="补充学习路径已准备好",
+                state="complete",
+                expanded=False,
+            )
         session["repair"] = repair
         session["mode"] = repair["status"]
     _persist_daily(session)
@@ -1119,12 +1126,19 @@ def _advance_daily_repair(
         is_correct,
         "react_support",
     )
-    repair = advance_repair(
-        state=session["repair"],
-        support_question=support_question,
-        user_answer=user_answer,
-        is_correct=is_correct,
-    )
+    with st.status("噜噜正在根据这道补充题调整学习路径…", expanded=True) as progress_status:
+        repair = advance_repair(
+            state=session["repair"],
+            support_question=support_question,
+            user_answer=user_answer,
+            is_correct=is_correct,
+            progress=progress_status.write,
+        )
+        progress_status.update(
+            label="下一步学习安排已更新",
+            state="complete",
+            expanded=False,
+        )
     session["repair"] = repair
     session["mode"] = repair["status"]
     session["asked_ids"] = repair.get("asked_ids", session.get("asked_ids", []))
@@ -1214,10 +1228,17 @@ def _finish_daily_repair(
     record_question_bank_attempt(question, user_answer, is_correct, "react_retest")
     if is_correct:
         resolve_wrong_question(question["id"])
-    report = finish_repair(
-        state=session["repair"],
-        original_retest_correct=is_correct,
-    )
+    with st.status("噜噜正在整理这次补课记录…", expanded=True) as progress_status:
+        report = finish_repair(
+            state=session["repair"],
+            original_retest_correct=is_correct,
+            progress=progress_status.write,
+        )
+        progress_status.update(
+            label="知识补全报告已生成",
+            state="complete",
+            expanded=False,
+        )
     session["report"] = report
     session["mode"] = "report"
     session.pop("retest_pending_answer", None)

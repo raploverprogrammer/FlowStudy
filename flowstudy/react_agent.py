@@ -7,7 +7,7 @@ small set of actions, and asks the database for a real candidate question.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 from flowstudy.database import (
     choose_repair_questions,
@@ -21,6 +21,7 @@ from services.ai_service import AIServiceError, AITutor
 
 
 MAX_SUPPORT_QUESTIONS = 3
+ProgressCallback = Callable[[str], None]
 
 
 def _candidate_summary(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -131,7 +132,10 @@ def start_repair(
     original_question: dict[str, Any],
     original_user_answer: str,
     asked_ids: list[str],
+    progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
+    report_progress = progress or (lambda _message: None)
+    report_progress("正在读取这道题的内部知识标签…")
     state: dict[str, Any] = {
         "status": "repair",
         "original_question": original_question,
@@ -150,11 +154,13 @@ def start_repair(
         {"status": state["status"], "asked_ids": state["asked_ids"]},
     )
     state["run_id"] = run_id
+    report_progress("正在查询本章节的掌握度和近期答题记录…")
     candidates = choose_repair_questions(
         original_question["section_id"],
         state["asked_ids"],
         limit=5,
     )
+    report_progress(f"已找到 {len(candidates)} 道固定题库候选题，正在安排补课路径…")
     action, observation, _ = _choose_action(
         original_question=original_question,
         original_user_answer=original_user_answer,
@@ -172,6 +178,7 @@ def start_repair(
         {"section_id": original_question["section_id"]},
         {"candidates": _candidate_summary(candidates)},
     )
+    report_progress("噜噜已经完成诊断，正在准备下一步…")
     state["gap"] = action["gap"]
     state["message"] = action["user_message"]
     if action["question_id"]:
@@ -189,7 +196,10 @@ def advance_repair(
     support_question: dict[str, Any],
     user_answer: str,
     is_correct: bool,
+    progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
+    report_progress = progress or (lambda _message: None)
+    report_progress("正在记录这道补充题的结果…")
     support_results = list(state.get("support_results", []))
     support_results.append(
         {
@@ -208,6 +218,7 @@ def advance_repair(
         asked_ids,
         limit=5,
     )
+    report_progress(f"正在结合本次结果重新筛选 {len(candidates)} 道候选题…")
     action, observation, _ = _choose_action(
         original_question=original_question,
         original_user_answer=state["original_user_answer"],
@@ -229,6 +240,7 @@ def advance_repair(
         },
         {"candidates": _candidate_summary(candidates)},
     )
+    report_progress("噜噜已经完成下一步判断…")
     state["gap"] = action["gap"]
     state["message"] = action["user_message"]
     state["current_question"] = None
@@ -246,7 +258,10 @@ def finish_repair(
     *,
     state: dict[str, Any],
     original_retest_correct: bool,
+    progress: ProgressCallback | None = None,
 ) -> dict[str, str]:
+    report_progress = progress or (lambda _message: None)
+    report_progress("正在整理补课前后的答题结果…")
     facts = {
         "original_question_id": state["original_question_id"],
         "original_retest_correct": bool(original_retest_correct),
@@ -257,12 +272,14 @@ def finish_repair(
     tutor = AITutor()
     if tutor.enabled:
         try:
+            report_progress("正在请噜噜生成本次知识补全报告…")
             report = tutor.generate_repair_report(facts)
         except AIServiceError:
             report = _fallback_report(facts)
     else:
         report = _fallback_report(facts)
     finish_react_run(int(state["run_id"]), "complete", {**facts, **report})
+    report_progress("报告已生成，正在保存到学习记录…")
     return report
 
 
