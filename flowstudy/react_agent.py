@@ -24,6 +24,69 @@ MAX_SUPPORT_QUESTIONS = 3
 ProgressCallback = Callable[[str], None]
 
 
+def _emit(
+    state: dict[str, Any],
+    progress: ProgressCallback | None,
+    kind: str,
+    message: str,
+) -> None:
+    """Publish a safe, user-facing ReAct event without exposing hidden reasoning."""
+    state.setdefault("trace", []).append({"kind": kind, "message": message})
+    if progress:
+        progress(f"**{kind}**：{message}")
+
+
+def _mastery_summary(mastery: dict[str, Any]) -> str:
+    if not mastery:
+        return "本章节还没有可用的答题记录"
+    attempts = int(mastery.get("attempts", 0))
+    accuracy = float(mastery.get("accuracy", 0.0))
+    coverage = float(mastery.get("coverage", 0.0))
+    return (
+        f"已答 {attempts} 次，正确率 {accuracy:.0%}，"
+        f"题目覆盖率 {coverage:.0%}"
+    )
+
+
+def _knowledge_summary(knowledge: list[dict[str, Any]]) -> str:
+    titles = [str(item.get("title", "")).strip() for item in knowledge]
+    titles = [title for title in titles if title]
+    return "、".join(titles[:3]) or "当前使用章节级知识标签"
+
+
+def _candidate_summary_text(candidates: list[dict[str, Any]]) -> str:
+    if not candidates:
+        return "没有找到尚未做过的同章节候选题"
+    labels = []
+    for item in candidates[:3]:
+        phase = "基础" if item.get("phase") == "foundation" else "综合"
+        labels.append(f"{phase}题第{item.get('question_number')}题")
+    suffix = "" if len(candidates) <= 3 else "等"
+    return f"找到 {len(candidates)} 道候选题：" + "、".join(labels) + suffix
+
+
+def _action_summary(
+    action: dict[str, Any], candidates: list[dict[str, Any]]
+) -> str:
+    labels = {
+        "practice_same_section": "继续练习当前章节",
+        "practice_prerequisite": "先补当前章节的基础题",
+        "verify_original": "回到原题验证迁移",
+        "finish": "结束本次补课",
+    }
+    name = labels.get(str(action.get("action")), "调整学习路径")
+    question_id = action.get("question_id")
+    if question_id:
+        selected = next(
+            (item for item in candidates if item.get("id") == question_id),
+            None,
+        )
+        if selected:
+            phase = "基础" if selected.get("phase") == "foundation" else "综合"
+            name += f"，安排{phase}题第{selected.get('question_number')}题"
+    return name
+
+
 def _candidate_summary(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
@@ -134,8 +197,6 @@ def start_repair(
     asked_ids: list[str],
     progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
-    report_progress = progress or (lambda _message: None)
-    report_progress("正在读取这道题的内部知识标签…")
     state: dict[str, Any] = {
         "status": "repair",
         "original_question": original_question,
@@ -147,20 +208,31 @@ def start_repair(
         "current_question": None,
         "gap": "",
         "message": "",
+        "trace": [],
     }
+    _emit(
+        state,
+        progress,
+        "观察",
+        f"原题属于「{original_question['section_title']}」，本次回答判定为错误。",
+    )
+    _emit(
+        state,
+        progress,
+        "行动",
+        "查询这道题的知识标签、章节掌握度和近期答题记录。",
+    )
     run_id = start_react_run(
         daily_session_id,
         original_question["id"],
         {"status": state["status"], "asked_ids": state["asked_ids"]},
     )
     state["run_id"] = run_id
-    report_progress("正在查询本章节的掌握度和近期答题记录…")
     candidates = choose_repair_questions(
         original_question["section_id"],
         state["asked_ids"],
         limit=5,
     )
-    report_progress(f"已找到 {len(candidates)} 道固定题库候选题，正在安排补课路径…")
     action, observation, _ = _choose_action(
         original_question=original_question,
         original_user_answer=original_user_answer,
@@ -168,6 +240,25 @@ def start_repair(
         candidates=candidates,
         support_count=0,
         last_support_correct=None,
+    )
+    _emit(
+        state,
+        progress,
+        "观察",
+        f"知识标签：{_knowledge_summary(observation['knowledge_tags'])}；"
+        f"章节掌握情况：{_mastery_summary(observation['section_mastery'])}。",
+    )
+    _emit(
+        state,
+        progress,
+        "行动",
+        "从固定题库筛选同章节候选题，并排除本次已经做过的题目。",
+    )
+    _emit(
+        state,
+        progress,
+        "观察",
+        _candidate_summary_text(candidates),
     )
     record_react_step(
         run_id,
@@ -178,15 +269,18 @@ def start_repair(
         {"section_id": original_question["section_id"]},
         {"candidates": _candidate_summary(candidates)},
     )
-    report_progress("噜噜已经完成诊断，正在准备下一步…")
     state["gap"] = action["gap"]
     state["message"] = action["user_message"]
     if action["question_id"]:
         state["current_question"] = next(
             item for item in candidates if item["id"] == action["question_id"]
         )
+        _emit(state, progress, "行动", _action_summary(action, candidates))
+        _emit(state, progress, "结果", action["user_message"])
     else:
         state["status"] = "original_retest"
+        _emit(state, progress, "行动", _action_summary(action, candidates))
+        _emit(state, progress, "结果", "当前没有合适的补充题，直接回到原题验证。")
     return state
 
 
@@ -198,8 +292,13 @@ def advance_repair(
     is_correct: bool,
     progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
-    report_progress = progress or (lambda _message: None)
-    report_progress("正在记录这道补充题的结果…")
+    _emit(
+        state,
+        progress,
+        "观察",
+        f"补充题「{support_question['section_title']}·第{support_question['question_number']}题」"
+        f"回答{'正确' if is_correct else '错误'}。",
+    )
     support_results = list(state.get("support_results", []))
     support_results.append(
         {
@@ -218,7 +317,12 @@ def advance_repair(
         asked_ids,
         limit=5,
     )
-    report_progress(f"正在结合本次结果重新筛选 {len(candidates)} 道候选题…")
+    _emit(
+        state,
+        progress,
+        "行动",
+        "结合这次答题结果，重新筛选下一步候选题。",
+    )
     action, observation, _ = _choose_action(
         original_question=original_question,
         original_user_answer=state["original_user_answer"],
@@ -226,6 +330,13 @@ def advance_repair(
         candidates=candidates,
         support_count=state["support_count"],
         last_support_correct=bool(is_correct),
+    )
+    _emit(
+        state,
+        progress,
+        "观察",
+        f"当前累计完成 {state['support_count']} 道补充题；"
+        f"{_candidate_summary_text(candidates)}。",
     )
     step = int(state.get("support_count", 0)) + 1
     record_react_step(
@@ -240,7 +351,6 @@ def advance_repair(
         },
         {"candidates": _candidate_summary(candidates)},
     )
-    report_progress("噜噜已经完成下一步判断…")
     state["gap"] = action["gap"]
     state["message"] = action["user_message"]
     state["current_question"] = None
@@ -249,8 +359,12 @@ def advance_repair(
             item for item in candidates if item["id"] == action["question_id"]
         )
         state["status"] = "repair"
+        _emit(state, progress, "行动", _action_summary(action, candidates))
+        _emit(state, progress, "结果", action["user_message"])
     else:
         state["status"] = "original_retest"
+        _emit(state, progress, "行动", _action_summary(action, candidates))
+        _emit(state, progress, "结果", "补充路径已完成，回到原题验证是否真正掌握。")
     return state
 
 
@@ -260,8 +374,13 @@ def finish_repair(
     original_retest_correct: bool,
     progress: ProgressCallback | None = None,
 ) -> dict[str, str]:
-    report_progress = progress or (lambda _message: None)
-    report_progress("正在整理补课前后的答题结果…")
+    _emit(
+        state,
+        progress,
+        "观察",
+        f"原题重新作答结果：{'正确' if original_retest_correct else '仍需复习'}；"
+        f"本次完成 {int(state.get('support_count', 0))} 道补充题。",
+    )
     facts = {
         "original_question_id": state["original_question_id"],
         "original_retest_correct": bool(original_retest_correct),
@@ -272,14 +391,15 @@ def finish_repair(
     tutor = AITutor()
     if tutor.enabled:
         try:
-            report_progress("正在请噜噜生成本次知识补全报告…")
+            _emit(state, progress, "行动", "根据本次 ReAct 轨迹生成知识补全报告。")
             report = tutor.generate_repair_report(facts)
         except AIServiceError:
             report = _fallback_report(facts)
     else:
+        _emit(state, progress, "行动", "根据已记录的答题结果生成离线知识补全报告。")
         report = _fallback_report(facts)
     finish_react_run(int(state["run_id"]), "complete", {**facts, **report})
-    report_progress("报告已生成，正在保存到学习记录…")
+    _emit(state, progress, "结果", "报告已生成，补课记录已保存。")
     return report
 
 

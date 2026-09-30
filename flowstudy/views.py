@@ -1021,6 +1021,16 @@ def _render_daily_answer_media(question: dict[str, Any]) -> None:
         st.info("题库暂未检出对应解析图片，可以在下方请教噜噜。")
 
 
+def _render_react_trace(trace: list[dict[str, Any]], *, expanded: bool = False) -> None:
+    if not trace:
+        return
+    with st.expander("噜噜的 ReAct 学习轨迹", expanded=expanded):
+        for event in trace:
+            kind = escape(str(event.get("kind", "过程")))
+            message = escape(str(event.get("message", "")))
+            st.markdown(f"- **{kind}**：{message}", unsafe_allow_html=True)
+
+
 def _daily_record_initial(
     session: dict[str, Any],
     question: dict[str, Any],
@@ -1148,6 +1158,7 @@ def _advance_daily_repair(
 def _render_daily_repair_question(session: dict[str, Any]) -> None:
     repair = session["repair"]
     question = repair.get("current_question")
+    _render_react_trace(repair.get("trace", []), expanded=True)
     st.info(repair.get("message") or "噜噜正在安排一道人知识补充题。")
     st.caption(f"当前补充题：{question['section_title']}")
     _render_daily_question_media(question)
@@ -1185,6 +1196,7 @@ def _render_daily_repair_question(session: dict[str, Any]) -> None:
 def _render_daily_original_retest(session: dict[str, Any]) -> None:
     repair = session["repair"]
     question = session["question"]
+    _render_react_trace(repair.get("trace", []), expanded=True)
     st.info(repair.get("message") or "补充练习完成，现在回到原题验证。")
     st.markdown("### 回到原题")
     _render_daily_question_media(question)
@@ -1261,6 +1273,7 @@ def _finish_daily_repair(
 def _render_daily_report(session: dict[str, Any]) -> None:
     report = session.get("report", {})
     st.markdown("## 本次知识补全报告")
+    _render_react_trace(session.get("repair", {}).get("trace", []))
     st.markdown(report.get("content", "本次补课已经结束。"))
     st.markdown(f"**下一步建议：** {report.get('next_suggestion', '继续复习本题所属章节。')}")
     summary_id = session.get("summary_id")
