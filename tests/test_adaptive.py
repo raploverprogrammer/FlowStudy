@@ -82,8 +82,8 @@ class AdaptiveFlowTests(unittest.TestCase):
                 progress=progress.append,
             )
             self.assertEqual(state["status"], "repair")
-            self.assertTrue(any(message.startswith("**观察**：") for message in progress))
-            self.assertTrue(any(message.startswith("**行动**：") for message in progress))
+            self.assertTrue(any("原题属于" in message for message in progress))
+            self.assertTrue(any("查询这道题" in message for message in progress))
             self.assertGreaterEqual(len(state["trace"]), 6)
             support = state["current_question"]
             state = react_agent.advance_repair(
@@ -103,9 +103,8 @@ class AdaptiveFlowTests(unittest.TestCase):
             self.assertTrue(
                 any("补充题" in event["message"] for event in state["trace"])
             )
-            self.assertTrue(
-                any("报告已生成，补课记录已保存。" in message for message in progress)
-            )
+            self.assertTrue(any("回到原题验证" in message for message in progress))
+            self.assertTrue(any("报告已生成" in message for message in progress))
 
 
 class _OfflineTutor:

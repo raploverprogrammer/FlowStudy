@@ -1028,7 +1028,9 @@ def _render_react_trace(trace: list[dict[str, Any]], *, expanded: bool = False) 
     with st.container(border=True):
         for event in trace:
             message = escape(str(event.get("message", "")))
-            st.markdown(f"- {message}", unsafe_allow_html=True)
+            kind = str(event.get("kind", ""))
+            prefix = "**结果**：" if kind == "结果" else ""
+            st.markdown(f"- {prefix}{message}", unsafe_allow_html=True)
 
 
 def _daily_record_initial(

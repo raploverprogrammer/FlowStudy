@@ -30,10 +30,13 @@ def _emit(
     kind: str,
     message: str,
 ) -> None:
-    """Publish a safe, user-facing ReAct event without exposing hidden reasoning."""
+    """Record a ReAct event and show its safe summary without internal labels."""
     state.setdefault("trace", []).append({"kind": kind, "message": message})
     if progress:
-        progress(f"**{kind}**：{message}")
+        if kind in {"观察", "行动"}:
+            progress(message)
+        else:
+            progress(f"**{kind}**：{message}")
 
 
 def _mastery_summary(mastery: dict[str, Any]) -> str:
