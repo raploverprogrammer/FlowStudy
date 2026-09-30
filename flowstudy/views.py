@@ -134,6 +134,7 @@ def _go_treasures() -> None:
     st.session_state["app_view"] = "treasures"
 
 
+@st.cache_data(show_spinner=False)
 def _image_data_uri(path: Any) -> str:
     mime = mimetypes.guess_type(str(path))[0] or "image/png"
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")

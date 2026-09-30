@@ -1,12 +1,17 @@
-import base64
-
 import streamlit as st
 
 from flowstudy.config import LULU_HOME_SCENE
 
 
+@st.cache_data(show_spinner=False)
+def _ocean_background_data() -> str:
+    import base64
+
+    return base64.b64encode(LULU_HOME_SCENE.read_bytes()).decode("ascii")
+
+
 def apply_styles() -> None:
-    ocean_background = base64.b64encode(LULU_HOME_SCENE.read_bytes()).decode("ascii")
+    ocean_background = _ocean_background_data()
     st.markdown(
         """
         <style>
@@ -37,7 +42,7 @@ def apply_styles() -> None:
                     rgba(255,253,247,.85) 58%,
                     rgba(255,253,247,.80) 100%
                 ),
-                url("data:image/png;base64,__OCEAN_BACKGROUND__") center/cover no-repeat;
+                url("data:image/webp;base64,__OCEAN_BACKGROUND__") center/cover no-repeat;
             pointer-events: none;
             z-index: 0;
         }
@@ -49,7 +54,7 @@ def apply_styles() -> None:
                     rgba(255,253,247,.30) 52%,
                     rgba(255,253,247,.30) 100%
                 ),
-                url("data:image/png;base64,__OCEAN_BACKGROUND__") center/cover no-repeat;
+                url("data:image/webp;base64,__OCEAN_BACKGROUND__") center/cover no-repeat;
         }
         .stApp > * { position: relative; z-index: 1; }
         [data-testid="stHeader"],

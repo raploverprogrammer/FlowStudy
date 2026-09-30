@@ -20,11 +20,12 @@ USER_AVATAR_IMAGE = ASSETS_DIR / "images" / "user-avatar.jpg"
 LULU_WELCOME_VIDEO = ASSETS_DIR / "videos" / "welcome.mp4"
 LULU_CHEER_VIDEO = ASSETS_DIR / "videos" / "cheer.mp4"
 LULU_FINISH_VIDEO = ASSETS_DIR / "videos" / "finish.mp4"
-LULU_HOME_SCENE = ASSETS_DIR / "scenes" / "home-wave.png"
-LULU_LEARNING_SCENE = ASSETS_DIR / "scenes" / "learning-telescope.png"
-LULU_WRONG_SCENE = ASSETS_DIR / "scenes" / "wrong-reef.png"
-LULU_LOG_SCENE = ASSETS_DIR / "scenes" / "log-journal.png"
-LULU_FAVORITES_SCENE = ASSETS_DIR / "scenes" / "favorites-treasure.png"
+# WebP keeps the same 1672x941 artwork while reducing rerun payloads by over 95%.
+LULU_HOME_SCENE = ASSETS_DIR / "scenes" / "home-wave.webp"
+LULU_LEARNING_SCENE = ASSETS_DIR / "scenes" / "learning-telescope.webp"
+LULU_WRONG_SCENE = ASSETS_DIR / "scenes" / "wrong-reef.webp"
+LULU_LOG_SCENE = ASSETS_DIR / "scenes" / "log-journal.webp"
+LULU_FAVORITES_SCENE = ASSETS_DIR / "scenes" / "favorites-treasure.webp"
 
 
 def get_secret(name: str, default: str = "") -> str:

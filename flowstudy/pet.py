@@ -9,6 +9,7 @@ import streamlit.components.v1 as components
 from flowstudy.config import LULU_PET_IMAGE
 
 
+@st.cache_data(show_spinner=False)
 def _image_data_url() -> str:
     encoded = base64.b64encode(LULU_PET_IMAGE.read_bytes()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
