@@ -1024,11 +1024,10 @@ def _render_daily_answer_media(question: dict[str, Any]) -> None:
 def _render_react_trace(trace: list[dict[str, Any]], *, expanded: bool = False) -> None:
     if not trace:
         return
-    with st.expander("噜噜的 ReAct 学习轨迹", expanded=expanded):
+    with st.container(border=True):
         for event in trace:
-            kind = escape(str(event.get("kind", "过程")))
             message = escape(str(event.get("message", "")))
-            st.markdown(f"- **{kind}**：{message}", unsafe_allow_html=True)
+            st.markdown(f"- {message}", unsafe_allow_html=True)
 
 
 def _daily_record_initial(
