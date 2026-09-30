@@ -95,6 +95,9 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(database.get_wrong_questions(), [])
         self.assertEqual(len(database.get_wrong_questions(True)), 1)
 
+        database.delete_wrong_question(question["id"])
+        self.assertEqual(database.get_wrong_questions(True), [])
+
     def test_ai_tutor_question_can_be_saved_as_reef_record(self) -> None:
         concept = get_concept("chapter-1")
         question = {

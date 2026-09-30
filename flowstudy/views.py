@@ -40,6 +40,7 @@ from flowstudy.database import (
     finish_tutor_session,
     choose_question_bank_questions,
     choose_daily_question,
+    delete_wrong_question,
     get_question_knowledge,
     get_ai_tutor_attempts,
     get_concept_learning_context,
@@ -1508,6 +1509,13 @@ def render_wrong_book() -> None:
                     question_images=question.get("question_images", []),
                     key_prefix="reef_lulu",
                 )
+                if st.button(
+                    "删除这条错题记录",
+                    key=f"reef_delete_bank_{question['id']}",
+                ):
+                    delete_wrong_question(question["id"])
+                    st.toast("已删除这条错题记录")
+                    st.rerun()
             continue
         try:
             topic = get_topic(row["topic_id"]) if row["topic_id"] else None
@@ -1586,6 +1594,13 @@ def render_wrong_book() -> None:
                             topic["topic"],
                         )
                     )
+            if st.button(
+                "删除这条错题记录",
+                key=f"reef_delete_legacy_{question['id']}",
+            ):
+                delete_wrong_question(question["id"])
+                st.toast("已删除这条错题记录")
+                st.rerun()
 
 
 def render_favorites() -> None:

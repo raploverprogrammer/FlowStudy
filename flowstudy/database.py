@@ -1027,6 +1027,15 @@ def resolve_wrong_question(question_id: str) -> None:
         )
 
 
+def delete_wrong_question(question_id: str) -> None:
+    """Remove one wrong-question record without deleting the question itself."""
+    with connection() as conn:
+        conn.execute(
+            "DELETE FROM wrong_questions WHERE question_id = ?",
+            (question_id,),
+        )
+
+
 def get_wrong_questions(include_resolved: bool = False) -> list[sqlite3.Row]:
     where = "" if include_resolved else "WHERE resolved = 0"
     with connection() as conn:
