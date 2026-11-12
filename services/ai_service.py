@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+import re
+import time
+from typing import Any, Callable
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -67,6 +69,14 @@ class AITutor:
                 max_retries=0,
             )
 
+    @staticmethod
+    def _clean_protocol_text(text: str, fallback: str) -> str:
+        """Keep accidental tool-protocol fragments out of learner replies."""
+        value = str(text or "").strip()
+        if re.search(r"(?is)\bjson\b.*[\"']question_id[\"']\s*:", value):
+            return fallback
+        return value or fallback
+
     @property
     def enabled(self) -> bool:
         return bool(self.api_key and self.client)
@@ -84,25 +94,76 @@ class AITutor:
         *,
         temperature: float = 0.35,
         max_tokens: int = 1600,
+        json_mode: bool = True,
     ) -> dict[str, Any]:
-        try:
-            response = self._require_client().chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                response_format={"type": "json_object"},
-            )
-            content = response.choices[0].message.content or ""
-            return json.loads(
-                content.strip().removeprefix("```json").removesuffix("```").strip()
-            )
-        except AIServiceError:
-            raise
-        except (json.JSONDecodeError, IndexError, KeyError, TypeError) as exc:
-            raise AIServiceError("噜噜导师返回的数据格式不完整，请稍后重试。") from exc
-        except Exception as exc:
-            raise AIServiceError(f"OpenRouter 调用失败：{exc}") from exc
+        for attempt in range(3):
+            try:
+                request = {
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                if json_mode:
+                    request["response_format"] = {"type": "json_object"}
+                response = self._require_client().chat.completions.create(**request)
+                content = response.choices[0].message.content or ""
+                cleaned = content.strip()
+                if cleaned.startswith("```json"):
+                    cleaned = cleaned.removeprefix("```json").strip()
+                if cleaned.endswith("```"):
+                    cleaned = cleaned.removesuffix("```").strip()
+                try:
+                    return json.loads(cleaned)
+                except json.JSONDecodeError:
+                    start = cleaned.find("{")
+                    end = cleaned.rfind("}")
+                    if start >= 0 and end > start:
+                        return json.loads(cleaned[start : end + 1])
+                    raise
+            except AIServiceError:
+                raise
+            except (json.JSONDecodeError, IndexError, KeyError, TypeError) as exc:
+                raise AIServiceError("噜噜导师返回的数据格式不完整，请稍后重试。") from exc
+            except Exception as exc:
+                status_code = getattr(exc, "status_code", None)
+                is_rate_limited = status_code == 429 or "429" in str(exc)
+                if is_rate_limited and attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                raise AIServiceError(f"OpenRouter 调用失败：{exc}") from exc
+
+    def _text_completion(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.35,
+        max_tokens: int = 800,
+    ) -> str:
+        """Request ordinary prose for learner-facing messages."""
+        for attempt in range(3):
+            try:
+                response = self._require_client().chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                content = (response.choices[0].message.content or "").strip()
+                if not content:
+                    raise AIServiceError("噜噜导师没有返回有效的引导内容，请稍后重试。")
+                return content
+            except AIServiceError:
+                raise
+            except (IndexError, KeyError, TypeError) as exc:
+                raise AIServiceError("噜噜导师没有返回有效的引导内容，请稍后重试。") from exc
+            except Exception as exc:
+                status_code = getattr(exc, "status_code", None)
+                is_rate_limited = status_code == 429 or "429" in str(exc)
+                if is_rate_limited and attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                raise AIServiceError(f"OpenRouter 调用失败：{exc}") from exc
 
     @staticmethod
     def _context_payload(
@@ -201,7 +262,7 @@ class AITutor:
 2. 结合最近对话继续讲，不重复已经讲清的整段内容；
 3. 优先定位用户卡住的条件、概念或推理步骤，再由浅入深解释；
 4. 不要只丢出答案。必要时用一个简短问题确认用户是否理解；
-5. 使用简体中文和 Markdown，尽量控制在 500 字以内；
+        5. 使用简体中文和 Markdown，完整回答，不要因为篇幅限制截断；内容较长时分段说明；
 6. 不得编造题目中没有的条件；OCR 不完整时明确提醒以扫描原题为准。
 """.strip()
         messages: list[dict[str, str]] = [
@@ -229,13 +290,782 @@ class AITutor:
                 model=self.model,
                 messages=messages,
                 temperature=0.2,
-                max_tokens=800,
+                max_tokens=1800,
             )
             return (response.choices[0].message.content or "").strip()
         except AIServiceError:
             raise
         except Exception as exc:
             raise AIServiceError(f"OpenRouter 调用失败：{exc}") from exc
+
+    def _chat_agent_turn_native(
+        self,
+        *,
+        user_message: str,
+        weak_concepts: list[dict[str, Any]],
+        memories: list[dict[str, Any]],
+        dialogue: list[dict[str, str]],
+        focus_concepts: list[dict[str, Any]] | None,
+        request_context: dict[str, Any] | None,
+        available_tools: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Route chat with real OpenAI-compatible tool calls when available."""
+        native_tools = [
+            {"type": "function", "function": tool}
+            for tool in available_tools
+            if isinstance(tool, dict) and tool.get("name")
+        ]
+        tool_names = {str(tool["function"]["name"]) for tool in native_tools}
+        payload = {
+            "user_message": user_message,
+            "weak_concepts": weak_concepts[:8],
+            "selected_focus": (focus_concepts or [])[:3],
+            "request_context": request_context or {},
+            "learning_memories": [
+                {"type": item.get("memory_type"), "content": item.get("content")}
+                for item in memories[:12]
+            ],
+            "recent_dialogue": dialogue[-10:],
+        }
+        try:
+            response = self._require_client().chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是 FlowStudy 的噜噜学习 Agent。理解完整对话后决定下一步。"
+                            "需要读取学习记录或题库时，必须直接调用合适的工具；不要只说‘我去查询’。"
+                            "用户的表达不固定，必须根据语义和上下文判断，不要求关键词。"
+                            "只想知道薄弱点、掌握情况或答题记录时调用 get_weak_concepts；"
+                            "如果用户说查漏补缺、找薄弱处巩固、按短板练习、补齐不会的内容，"
+                            "这是先分析掌握情况再练一道题的练习请求，应调用 choose_daily_question，"
+                            "不要只调用 get_weak_concepts，也不要只回复准备语句。"
+                            "get_learning_memories 只在用户明确要求记住或回忆偏好时调用。"
+                            "离题闲聊不要调用学习工具；不要生成题目，题目只能来自固定题库工具。"
+                        ),
+                    },
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                tools=native_tools,
+                tool_choice="auto",
+                temperature=0.2,
+                max_tokens=1200,
+            )
+        except AIServiceError:
+            raise
+        except Exception as exc:
+            raise AIServiceError(f"OpenRouter 原生工具调用失败：{exc}") from exc
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            raise AIServiceError("噜噜原生工具调用没有返回消息，请改用普通路由重试。")
+        message = getattr(choices[0], "message", None)
+        if message is None:
+            raise AIServiceError("噜噜原生工具调用返回了空消息，请改用普通路由重试。")
+        tool_calls = getattr(message, "tool_calls", None) or []
+        if tool_calls:
+            call = tool_calls[0]
+            function = getattr(call, "function", None)
+            name = str(getattr(function, "name", ""))
+            if function is None or not name:
+                raise AIServiceError("噜噜返回的工具调用不完整，请改用普通路由重试。")
+            if name not in tool_names:
+                raise AIServiceError(f"噜噜请求了未注册的工具：{name}")
+            try:
+                arguments = json.loads(function.arguments or "{}")
+            except json.JSONDecodeError as exc:
+                raise AIServiceError("噜噜返回的工具参数格式不完整，请稍后重试。") from exc
+            if not isinstance(arguments, dict):
+                raise AIServiceError("噜噜返回的工具参数不是对象，请稍后重试。")
+            action = {
+                "get_weak_concepts": "review_weakest",
+                "choose_daily_question": "practice",
+                "choose_question_for_knowledge": "practice",
+            }.get(name, "answer")
+            tool_reply = str(getattr(message, "content", None) or "").strip()
+            if not tool_reply:
+                tool_reply = {
+                    "get_weak_concepts": "我先根据你的答题记录分析薄弱点。",
+                    "choose_daily_question": "我先从固定题库里挑一道合适的题。",
+                    "choose_question_for_knowledge": "我先从固定题库里查找对应知识点的题目。",
+                }.get(name, "我先读取相关学习数据，再继续回答你。")
+            return {
+                "reply": tool_reply,
+                "next_action": action,
+                "memory": "",
+                "target_knowledge_id": arguments.get("knowledge_id"),
+                "tool_name": name,
+                "tool_arguments": arguments,
+                "tool_call_id": str(getattr(call, "id", "chat-tool-call-1")),
+            }
+        return {
+            "reply": str(getattr(message, "content", None) or "你可以继续告诉我你的想法。"),
+            "next_action": "answer",
+            "memory": "",
+            "target_knowledge_id": None,
+            "tool_name": None,
+            "tool_arguments": {},
+        }
+
+    def chat_agent_loop(
+        self,
+        *,
+        user_message: str,
+        weak_concepts: list[dict[str, Any]],
+        memories: list[dict[str, Any]],
+        dialogue: list[dict[str, str]],
+        focus_concepts: list[dict[str, Any]] | None = None,
+        request_context: dict[str, Any] | None = None,
+        available_tools: list[dict[str, Any]],
+        tool_executor: Callable[[str, dict[str, Any]], Any],
+        max_steps: int = 6,
+        force_tool_on_first_step: bool = False,
+    ) -> dict[str, Any]:
+        """Run the open-ended chat Agent Loop.
+
+        The model chooses whether to stop or call another registered tool
+        after each observation. The application owns execution and safety;
+        the model owns the next-step decision.
+        """
+        native_tools = [
+            {"type": "function", "function": tool}
+            for tool in available_tools
+            if isinstance(tool, dict) and tool.get("name")
+        ]
+        tool_names = {str(tool["function"]["name"]) for tool in native_tools}
+        payload = {
+            "user_message": user_message,
+            "weak_concepts": weak_concepts[:8],
+            "selected_focus": (focus_concepts or [])[:3],
+            "request_context": request_context or {},
+            "learning_memories": [
+                {"type": item.get("memory_type"), "content": item.get("content")}
+                for item in memories[:12]
+            ],
+            "recent_dialogue": dialogue[-10:],
+        }
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "content": (
+                    "你是 FlowStudy 的噜噜学习 Agent。根据用户原话和完整对话判断意图。"
+                    "每次收到工具结果后重新判断下一步；如果信息已经足够就停止调用工具并回答。"
+                    "只想了解薄弱点时调用 get_weak_concepts。"
+                    "如果 request_context.direct_learning_question 为 true，用户是在询问知识内容，"
+                    "直接围绕问题回答，不要调用薄弱点或题库工具。"
+                    "想查漏补缺、按薄弱点练习或补齐不会的内容时，先在需要时读取掌握情况，"
+                    "再调用固定题库工具选择题目，不要生成题目。"
+                    "用户说出题、出道题、来一道、考考我、做题或再来一道时，不能只用文字答复，"
+                    "必须调用题库工具；如果没有指定知识点，就调用 choose_daily_question。"
+                    "如果上一轮已经表达了出题或练题意图，而本轮只补充一个知识点名称，"
+                    "必须继承上一轮意图，把这个名称当作题库检索参数，调用 choose_question_for_knowledge；"
+                    "不要把它当成新的闲聊，也不要再次只回复确认性话术。"
+                    "与学习无关的闲聊不要调用学习工具。用户表达不需要包含固定关键词。"
+                ),
+            },
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ]
+        tool_results: list[dict[str, Any]] = []
+        last_tool_name = ""
+        last_tool_arguments: dict[str, Any] = {}
+        try:
+            for _ in range(max(1, max_steps)):
+                response = self._require_client().chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=native_tools,
+                    tool_choice=(
+                        "required"
+                        if force_tool_on_first_step and not tool_results
+                        else "auto"
+                    ),
+                    temperature=0.2,
+                    max_tokens=1200,
+                )
+                choices = getattr(response, "choices", None) or []
+                if not choices:
+                    raise AIServiceError("噜噜 Agent 没有返回下一步决策。")
+                message = getattr(choices[0], "message", None)
+                if message is None:
+                    raise AIServiceError("噜噜 Agent 返回了空决策。")
+                calls = getattr(message, "tool_calls", None) or []
+                if not calls:
+                    reply = str(getattr(message, "content", None) or "").strip()
+                    question_tools = {
+                        "choose_daily_question",
+                        "choose_question_for_knowledge",
+                        "search_prerequisite_questions",
+                        "search_same_section_questions",
+                    }
+                    if any(item["tool"] in question_tools for item in tool_results):
+                        action = "practice"
+                    elif any(item["tool"] == "get_weak_concepts" for item in tool_results):
+                        action = "review_weakest"
+                    else:
+                        action = "answer"
+                    return {
+                        "reply": reply or "你可以继续告诉我想解决的学习问题。",
+                        "next_action": action,
+                        "memory": "",
+                        "target_knowledge_id": last_tool_arguments.get("knowledge_id"),
+                        "tool_name": last_tool_name or None,
+                        "tool_arguments": last_tool_arguments,
+                        "tool_results": tool_results,
+                    }
+
+                assistant_calls: list[dict[str, Any]] = []
+                for call in calls:
+                    function = getattr(call, "function", None)
+                    name = str(getattr(function, "name", ""))
+                    if function is None or name not in tool_names:
+                        raise AIServiceError(f"噜噜请求了未注册的工具：{name}")
+                    try:
+                        arguments = json.loads(getattr(function, "arguments", "{}") or "{}")
+                    except json.JSONDecodeError as exc:
+                        raise AIServiceError("噜噜返回的工具参数格式不完整。") from exc
+                    if not isinstance(arguments, dict):
+                        raise AIServiceError("噜噜返回的工具参数不是对象。")
+                    call_id = str(getattr(call, "id", f"chat-tool-call-{len(tool_results) + 1}"))
+                    assistant_calls.append(
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": json.dumps(arguments, ensure_ascii=False),
+                            },
+                        }
+                    )
+                    last_tool_name = name
+                    last_tool_arguments = arguments
+                    result = tool_executor(name, arguments)
+                    tool_results.append(
+                        {"tool": name, "arguments": arguments, "result": result}
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "name": name,
+                            "content": json.dumps(result, ensure_ascii=False, default=str)[:6000],
+                        }
+                    )
+                messages.insert(
+                    -len(calls),
+                    {
+                        "role": "assistant",
+                        "content": getattr(message, "content", None),
+                        "tool_calls": assistant_calls,
+                    },
+                )
+            raise AIServiceError("噜噜 Agent 达到本轮工具调用上限。")
+        except AIServiceError:
+            raise
+        except Exception as exc:
+            raise AIServiceError(f"OpenRouter Agent Loop 调用失败：{exc}") from exc
+
+    def chat_agent_turn(
+        self,
+        *,
+        user_message: str,
+        weak_concepts: list[dict[str, Any]],
+        memories: list[dict[str, Any]],
+        dialogue: list[dict[str, str]],
+        focus_concepts: list[dict[str, Any]] | None = None,
+        request_context: dict[str, Any] | None = None,
+        available_tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Route an open-ended Lulu conversation to a safe learning action."""
+        tools = available_tools or []
+        if tools:
+            try:
+                return self._chat_agent_turn_native(
+                    user_message=user_message,
+                    weak_concepts=weak_concepts,
+                    memories=memories,
+                    dialogue=dialogue,
+                    focus_concepts=focus_concepts,
+                    request_context=request_context,
+                    available_tools=tools,
+                )
+            except AIServiceError:
+                # Some OpenAI-compatible providers/models do not implement
+                # function calling. Keep the validated JSON route as fallback.
+                pass
+        payload = {
+            "user_message": user_message,
+            "weak_concepts": weak_concepts[:8],
+            "selected_focus": (focus_concepts or [])[:3],
+            "request_context": request_context or {},
+            "learning_memories": [
+                {"type": item.get("memory_type"), "content": item.get("content")}
+                for item in memories[:12]
+            ],
+            "recent_dialogue": dialogue[-10:],
+            "available_tools": available_tools or [],
+            "allowed_actions": [
+                "answer",
+                "explain",
+                "practice",
+                "review_weakest",
+                "clarify",
+                "remember",
+            ],
+            "requirements": [
+                "用户明确要求出题、考考我或练习时选择 practice；绝对不要在 reply 中自行编写题目，应用会先读取掌握证据，再从固定题库取题",
+                "用户明确说出知识点时，target_knowledge_id 只能填写给定知识点；没有明确知识点时不要猜一个知识点，应用会按掌握度选择",
+                "request_context.direct_learning_question 为 true 时，直接回答知识问题，不调用学习记录或题库工具",
+                "practice 的 reply 只说明正在按掌握情况从固定题库取题，不要假装题目已经由你生成",
+                "先判断用户是在聊学习，还是在表达情绪、闲聊或询问与学习无关的内容",
+                "如果用户没有把话题和学习联系起来，就自然回应，不要硬扯薄弱点、题目或学习计划",
+                "用户询问概念或解法时选择 explain 或 answer",
+                "用户明确要求分析薄弱点时必须选择 review_weakest，只能依据 weak_concepts 和 selected_focus，不要编造统计结论",
+                "查漏补缺、找薄弱处巩固、按短板练习等表达，表示先读取掌握情况再从固定题库取一道题，应选择 practice 并请求题库工具，不要只回复‘稍等’",
+                "用户已经按知识点名称或列表序号做出选择时，必须围绕 selected_focus 回复，不要改换成其他知识点",
+                "用户只说不知道哪里不懂、很迷茫或没有明确学习方式时选择 clarify，先询问用户想讲解、分析薄弱点还是做诊断题，不要调用题目",
+                "只有用户明确要求记住偏好时才选择 remember",
+                "available_tools 是当前应用真实提供的工具目录；需要读取学习数据或题库时，先在 tool_name 中选择目录里的工具并填写合法参数",
+                "不要编造工具名、参数或工具结果；不需要工具时 tool_name 必须为 null，tool_arguments 必须为空对象",
+                "tool_name 只是给应用的工具请求，应用会再次校验并决定实际执行；不要在 reply 中声称工具已经执行",
+                "reply 使用简体中文，完整回答当前问题；内容较长时分段，不要在步骤中途截断",
+            ],
+            "output_schema": {
+                "reply": "给用户看的回复",
+                "next_action": "answer|explain|practice|review_weakest|clarify|remember",
+                "memory": "需要保存的简短用户偏好，没有则为空",
+                "target_knowledge_id": "用户明确指定或你判断应练习的知识点 id，没有则为 null",
+                "tool_name": "从 available_tools 中选择一个工具名，不需要工具时为 null",
+                "tool_arguments": "该工具的 JSON 参数对象，不需要工具时为空对象",
+            },
+        }
+        data = self._json_completion(
+            [
+                {
+                    "role": "system",
+                    "content": "你是 FlowStudy 的噜噜学习 Agent，负责把自然语言请求路由到合适的学习动作。",
+                },
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            temperature=0.2,
+            max_tokens=1200,
+            json_mode=False,
+        )
+        allowed = {
+            "answer",
+            "explain",
+            "practice",
+            "review_weakest",
+            "clarify",
+            "remember",
+        }
+        action = str(data.get("next_action", "answer"))
+        if action not in allowed:
+            action = "answer"
+        available_names = {
+            str(tool.get("name"))
+            for tool in (available_tools or [])
+            if isinstance(tool, dict) and tool.get("name")
+        }
+        tool_name = data.get("tool_name")
+        if tool_name not in available_names:
+            tool_name = None
+        if tool_name is None and action == "review_weakest" and "get_weak_concepts" in available_names:
+            # The action itself is already an unambiguous request to inspect
+            # mastery. This keeps the router robust when a provider omits the
+            # optional tool_name field from otherwise valid JSON.
+            tool_name = "get_weak_concepts"
+        tool_arguments = data.get("tool_arguments")
+        if not isinstance(tool_arguments, dict):
+            tool_arguments = {}
+        return {
+            "reply": str(data.get("reply") or "你可以告诉我想解释、练习还是复习哪一部分。"),
+            "next_action": action,
+            "memory": str(data.get("memory", "")).strip(),
+            "target_knowledge_id": data.get("target_knowledge_id"),
+            "tool_name": tool_name,
+            "tool_arguments": tool_arguments,
+        }
+
+    def diagnose_question_turn(
+        self,
+        *,
+        question: dict[str, Any],
+        original_user_answer: str,
+        user_message: str,
+        knowledge_tags: list[dict[str, Any]],
+        section_mastery: dict[str, Any],
+        weak_prerequisites: list[dict[str, Any]],
+        prerequisite_mastery: list[dict[str, Any]],
+        dialogue: list[dict[str, str]],
+        support_results: list[dict[str, Any]],
+        memory_context: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Choose the next bounded action in the daily-question diagnosis chat."""
+        payload = {
+            "question": {
+                "section_title": question.get("section_title", ""),
+                "question_text": str(question.get("question_text", ""))[:1800],
+                "reference_answer": question.get("answer_text", "") or question.get(
+                    "answer_choice", ""
+                ),
+            },
+            "original_user_answer": original_user_answer,
+            "user_message": user_message,
+            "knowledge_tags": [
+                {
+                    "id": item.get("id"),
+                    "title": item.get("title"),
+                    "relation": item.get("relation"),
+                }
+                for item in knowledge_tags
+            ],
+            "section_mastery": section_mastery,
+            "weak_prerequisites": [
+                {
+                    "id": item.get("id"),
+                    "title": item.get("title"),
+                    "mastery": item.get("mastery", {}),
+                }
+                for item in weak_prerequisites
+            ],
+            "prerequisite_mastery": [
+                {
+                    "id": item.get("id"),
+                    "title": item.get("title"),
+                    "mastery": item.get("mastery", {}),
+                }
+                for item in prerequisite_mastery
+            ],
+            "support_results": support_results[-3:],
+            "learning_memories": [
+                {
+                    "type": item.get("memory_type"),
+                    "content": item.get("content"),
+                }
+                for item in (memory_context or [])[:12]
+            ],
+            "recent_dialogue": dialogue[-8:],
+            "allowed_actions": [
+                "ask_clarification",
+                "explain",
+                "practice_prerequisite",
+                "practice_same_section",
+                "verify_original",
+                "finish",
+            ],
+            "requirements": [
+                "不要生成新题；需要练习时只能调用固定题库中的真实题目",
+                "先定位用户具体卡点，不要一开始倾倒完整答案",
+                "前置知识明显薄弱时优先 practice_prerequisite",
+                "用户明确要求出题、测试或练习时，必须选择 practice_prerequisite 或 practice_same_section",
+                "没有合适的薄弱前置知识，或用户要求检查当前章节时，选择 practice_same_section",
+                "例如‘给我出个题’、‘考考我’、‘再来一道’属于练习请求；‘题目这里为什么这样做’属于解释请求",
+                "用户已经理解或补充题验证通过时可以 verify_original",
+                "最多补充三道题；finish 只表示诊断可以结束",
+                "reply 是给用户看的简短回复，不输出隐藏思维过程",
+                "使用简体中文，控制在 350 字以内",
+            ],
+            "output_schema": {
+                "reply": "给用户看的回复",
+                "next_action": (
+                    "ask_clarification|explain|practice_prerequisite|"
+                    "practice_same_section|"
+                    "verify_original|finish"
+                ),
+                "target_knowledge_id": "要补充的前置知识 id，没有则为 null",
+                "gap": "当前判断的主要漏洞",
+            },
+        }
+        data = self._json_completion(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是 FlowStudy 的诊断 Agent 噜噜。"
+                        "你要通过题目、知识标签、掌握度和用户对话，"
+                        "选择下一步最有帮助的学习动作。"
+                    ),
+                },
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            temperature=0.15,
+            max_tokens=700,
+            json_mode=False,
+        )
+        allowed = {
+            "ask_clarification",
+            "explain",
+            "practice_prerequisite",
+            "practice_same_section",
+            "verify_original",
+            "finish",
+        }
+        action = str(data.get("next_action", "ask_clarification"))
+        if action not in allowed:
+            action = "ask_clarification"
+        return {
+            "reply": self._clean_protocol_text(
+                str(data.get("reply", "")),
+                "你具体卡在哪一步？可以说说你的思路。",
+            ),
+            "next_action": action,
+            "target_knowledge_id": data.get("target_knowledge_id"),
+            "gap": str(data.get("gap", "需要继续确认具体卡点。")),
+        }
+
+    @staticmethod
+    def native_diagnosis_tools() -> list[dict[str, Any]]:
+        """OpenAI-compatible tool schemas for the optional native protocol."""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_prerequisite_questions",
+                    "description": "从固定题库检索指定前置知识的未做题。不要生成新题。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_knowledge_id": {"type": "string"},
+                            "limit": {"type": "integer", "minimum": 1, "maximum": 5},
+                        },
+                        "required": ["target_knowledge_id"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_same_section_questions",
+                    "description": "从固定题库检索当前章节的未做题。不要生成新题。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "section_id": {"type": "string"},
+                            "limit": {"type": "integer", "minimum": 1, "maximum": 5},
+                        },
+                        "required": ["section_id"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        ]
+
+    def diagnose_question_turn_native(
+        self,
+        *,
+        question: dict[str, Any],
+        original_user_answer: str,
+        user_message: str,
+        knowledge_tags: list[dict[str, Any]],
+        section_mastery: dict[str, Any],
+        weak_prerequisites: list[dict[str, Any]],
+        prerequisite_mastery: list[dict[str, Any]],
+        dialogue: list[dict[str, str]],
+        support_results: list[dict[str, Any]],
+        memory_context: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Return a native tool call for the opt-in Function Calling path.
+
+        This method deliberately exposes only safe retrieval tools. The
+        application still validates arguments and owns all state changes.
+        """
+        payload = {
+            "question": {
+                "section_title": question.get("section_title", ""),
+                "question_text": str(question.get("question_text", ""))[:1800],
+            },
+            "original_user_answer": original_user_answer,
+            "user_message": user_message,
+            "knowledge_tags": knowledge_tags,
+            "section_mastery": section_mastery,
+            "weak_prerequisites": weak_prerequisites,
+            "prerequisite_mastery": prerequisite_mastery,
+            "support_results": support_results[-3:],
+            "learning_memories": [
+                {"type": item.get("memory_type"), "content": item.get("content")}
+                for item in (memory_context or [])[:12]
+            ],
+        }
+        try:
+            response = self._require_client().chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是 FlowStudy 的学习诊断 Agent。根据题目和学习证据决定下一步。"
+                            "需要练题时必须调用一个固定题库工具；不要生成题目。"
+                            "如果只是解释或追问，直接回复简短中文。"
+                        ),
+                    },
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                tools=self.native_diagnosis_tools(),
+                tool_choice="auto",
+                temperature=0.15,
+                max_tokens=700,
+            )
+            message = response.choices[0].message
+            tool_calls = getattr(message, "tool_calls", None) or []
+            if tool_calls:
+                call = tool_calls[0]
+                function = call.function
+                name = str(function.name)
+                try:
+                    arguments = json.loads(function.arguments or "{}")
+                except json.JSONDecodeError as exc:
+                    raise AIServiceError("噜噜导师返回的工具参数格式不完整，请稍后重试。") from exc
+                if name == "search_prerequisite_questions":
+                    return {
+                        "reply": "我根据当前掌握情况先从前置知识题库里抽一道题。",
+                        "next_action": "practice_prerequisite",
+                        "target_knowledge_id": arguments.get("target_knowledge_id"),
+                        "tool_name": name,
+                        "tool_arguments": arguments,
+                        "tool_call_id": str(getattr(call, "id", "native-call-1")),
+                        "gap": "原生工具调用选择前置知识题",
+                    }
+                if name == "search_same_section_questions":
+                    return {
+                        "reply": "我先从当前章节的固定题库里抽一道题来检测。",
+                        "next_action": "practice_same_section",
+                        "target_knowledge_id": None,
+                        "tool_name": name,
+                        "tool_arguments": arguments,
+                        "tool_call_id": str(getattr(call, "id", "native-call-1")),
+                        "gap": "原生工具调用选择同章节题",
+                    }
+                raise AIServiceError(f"模型请求了未允许的工具：{name}")
+            return {
+                "reply": self._clean_protocol_text(
+                    getattr(message, "content", None) or "",
+                    "你具体卡在哪一步？",
+                ),
+                "next_action": "ask_clarification",
+                "target_knowledge_id": None,
+                "gap": "原生工具调用路径选择继续对话",
+            }
+        except AIServiceError:
+            raise
+        except Exception as exc:
+            status_code = getattr(exc, "status_code", None)
+            raise AIServiceError(f"OpenRouter 原生工具调用失败：{exc}") from exc
+
+    def complete_native_tool_call(
+        self,
+        *,
+        user_message: str,
+        tool_call_id: str,
+        tool_name: str,
+        tool_arguments: dict[str, Any],
+        tool_result: Any,
+    ) -> str:
+        """Send a native tool result back and request the learner-facing reply."""
+        try:
+            response = self._require_client().chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是 FlowStudy 的学习 Agent。根据工具结果给出简短、准确的中文回复，不要生成新题。",
+                    },
+                    {"role": "user", "content": user_message},
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": tool_call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": tool_name,
+                                    "arguments": json.dumps(tool_arguments, ensure_ascii=False),
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "name": tool_name,
+                        "content": json.dumps(tool_result, ensure_ascii=False, default=str)[:4000],
+                    },
+                ],
+                tools=self.native_diagnosis_tools(),
+                tool_choice="none",
+                temperature=0.15,
+                max_tokens=350,
+            )
+            return self._clean_protocol_text(
+                response.choices[0].message.content or "",
+                "我已经根据固定题库的查询结果安排好下一步了。",
+            )
+        except AIServiceError:
+            raise
+        except Exception as exc:
+            raise AIServiceError(f"OpenRouter 工具结果回传失败：{exc}") from exc
+
+    def diagnose_question_opening(
+        self,
+        *,
+        question: dict[str, Any],
+        original_user_answer: str,
+        knowledge_tags: list[dict[str, Any]],
+        prerequisite_mastery: list[dict[str, Any]],
+        weak_prerequisites: list[dict[str, Any]],
+    ) -> str:
+        """Create the first learner-facing message from inspected evidence."""
+        payload = {
+            "question": {
+                "section_title": question.get("section_title", ""),
+                "question_text": str(question.get("question_text", ""))[:1800],
+            },
+            "original_user_answer": original_user_answer,
+            "knowledge_tags": [
+                {
+                    "title": item.get("title"),
+                    "relation": item.get("relation"),
+                }
+                for item in knowledge_tags
+            ],
+            "prerequisite_mastery": [
+                {
+                    "title": item.get("title"),
+                    "mastery": item.get("mastery", {}),
+                }
+                for item in prerequisite_mastery
+            ],
+            "weak_prerequisites": [
+                {
+                    "title": item.get("title"),
+                    "mastery": item.get("mastery", {}),
+                }
+                for item in weak_prerequisites
+            ],
+            "requirements": [
+                "这是错因诊断对话的第一句话，必须先引用已经分析出的直接考点或前置知识",
+                "如果存在薄弱前置知识，要指出它的答题次数和正确率，并说明为什么先关注它",
+                "不要直接给出完整答案，也不要假装已经确定用户的真实错误原因",
+                "最后只提出一个具体、容易回答的引导问题",
+                "使用自然的简体中文，控制在 180 字以内，不提工具、Agent、提示词或隐藏思考",
+            ],
+        }
+        return self._text_completion(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是 FlowStudy 的噜噜导师。"
+                        "你已经完成了对题目标签和前置知识掌握度的观察，"
+                        "现在要用证据充分的方式开启错因诊断对话。"
+                    ),
+                },
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            temperature=0.2,
+            max_tokens=450,
+        )
 
     def generate_question_dialogue_summary(
         self,
@@ -542,7 +1372,7 @@ class AITutor:
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
             temperature=0.1,
-            max_tokens=500,
+                    max_tokens=1200,
         )
         action = str(data.get("action", "verify_original"))
         allowed = {

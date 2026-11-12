@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import base64
 import uuid
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-from flowstudy.config import LULU_PET_IMAGE
+from flowstudy.config import LULU_PET_IMAGE, static_asset_url
 
-
-@st.cache_data(show_spinner=False)
-def _image_data_url() -> str:
-    encoded = base64.b64encode(LULU_PET_IMAGE.read_bytes()).decode("ascii")
-    return f"data:image/png;base64,{encoded}"
+# Older Streamlit releases do not expose ``st.iframe``. Define the optional
+# attribute so both runtime fallback and compatibility tests use one path.
+if not hasattr(st, "iframe"):
+    st.iframe = None
 
 
 def render_lulu_pet() -> None:
@@ -236,7 +234,9 @@ def render_lulu_pet() -> None:
     })();
     </script>
     """
-    html = html.replace("__PET_IMAGE__", _image_data_url())
+    # Let the browser cache the pet image instead of embedding its bytes in
+    # every freshly mounted component iframe.
+    html = html.replace("__PET_IMAGE__", static_asset_url(LULU_PET_IMAGE))
     html = html.replace("__MOUNT_ID__", uuid.uuid4().hex)
     iframe = getattr(st, "iframe", None)
     if iframe:

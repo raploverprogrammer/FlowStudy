@@ -11,8 +11,11 @@ from flowstudy.views import (
     render_home,
     render_favorites,
     render_learning,
+    render_lulu_chat,
+    render_welcome,
     render_wrong_book,
     sync_study_timer,
+    _discard_lulu_chat,
 )
 
 
@@ -23,18 +26,26 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-init_db()
+@st.cache_resource(show_spinner=False)
+def _initialize_database() -> None:
+    """Initialize the schema once per Streamlit process, not on every rerun."""
+    init_db()
+
+
+_initialize_database()
 apply_styles()
 
 PAGES = {
+    "welcome": render_welcome,
     "home": render_home,
     "daily": render_daily,
     "learning": render_learning,
+    "lulu_chat": render_lulu_chat,
     "reefs": render_wrong_book,
     "treasures": render_favorites,
 }
 LEGACY_PAGES = {
-    "首页": "home",
+    "首页": "welcome",
     "每日一题": "daily",
     "学习": "learning",
     "知识航线": "learning",
@@ -46,12 +57,27 @@ LEGACY_PAGES = {
     "学习记录": "home",
     "航海日志": "home",
 }
-current = st.session_state.get("app_view", st.session_state.get("nav_page", "home"))
+current = st.query_params.get("page", "welcome")
 page = LEGACY_PAGES.get(current, current)
 if page not in PAGES:
-    page = "home"
+    page = "welcome"
+if st.query_params.get("page") != page and not (
+    page == "welcome" and not st.query_params.get("page")
+):
+    st.query_params["page"] = page
+previous_page = st.session_state.get("app_view")
+if previous_page == "lulu_chat" and page != "lulu_chat":
+    # Cover browser back/direct URL navigation in addition to in-app buttons.
+    _discard_lulu_chat()
+if page == "daily" and previous_page != "daily":
+    st.session_state.pop("daily_session", None)
+if page == "learning" and previous_page != "learning":
+    st.session_state["learning_mode"] = "tree"
+    st.session_state.pop("bank_session", None)
+    st.session_state.pop("requested_section_id", None)
 st.session_state["app_view"] = page
 
 sync_study_timer(page)
 PAGES[page]()
-render_lulu_pet()
+if page not in {"welcome", "lulu_chat"}:
+    render_lulu_pet()

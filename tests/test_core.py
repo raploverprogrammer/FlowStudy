@@ -7,9 +7,15 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import flowstudy.database as database
+import flowstudy.chat_agent as chat_agent
 import flowstudy.views as views
 from services.ai_service import AITutor
-from flowstudy.views import _markdown_math, _plain_math
+from flowstudy.views import (
+    _chat_markdown,
+    _format_elapsed,
+    _markdown_math,
+    _plain_math,
+)
 from flowstudy.content import (
     concept_for_question,
     get_concept,
@@ -59,6 +65,18 @@ class ContentTests(unittest.TestCase):
             r"$P(A\mid B)=P(A)$ 恒成立",
         )
 
+    def test_chat_markdown_converts_latex_delimiters_for_rendering(self) -> None:
+        content = r"参数为 \(t\in[0,\pi]\)。\n\[ds=\sqrt{dx^2+dy^2}\]"
+        rendered = _chat_markdown(content)
+        self.assertIn(r"$t\in[0,\pi]$", rendered)
+        self.assertIn("$$\nds=", rendered)
+        self.assertNotIn(r"\(", rendered)
+        self.assertNotIn(r"\[", rendered)
+
+    def test_elapsed_time_is_readable_during_chat_processing(self) -> None:
+        self.assertEqual(_format_elapsed(3.9), "3秒")
+        self.assertEqual(_format_elapsed(65), "1分05秒")
+
     def test_route_helpers_follow_question_bank_order(self) -> None:
         sections = [
             {"id": "foundation-calculus-01", "attempts": 5, "correct_attempts": 3},
@@ -67,6 +85,526 @@ class ContentTests(unittest.TestCase):
         self.assertEqual(
             views._first_unexplored_section_id(sections),
             "foundation-calculus-02",
+        )
+
+    def test_direct_knowledge_question_does_not_become_weakness_analysis(self) -> None:
+        self.assertTrue(
+            chat_agent._is_direct_learning_question("分块矩阵的变化有哪些")
+        )
+        self.assertFalse(
+            chat_agent._is_direct_learning_question("最近学习情况怎么样")
+        )
+        self.assertFalse(
+            chat_agent._is_direct_learning_question("帮我找找薄弱点")
+        )
+
+    def test_chat_can_practice_from_a_new_session(self) -> None:
+        state = {"messages": [], "current_question": None}
+        question = {
+            "id": "chat-q1",
+            "section_title": "测试章节",
+            "question_number": 1,
+            "question_text": "测试题",
+            "options": ["A", "B"],
+            "question_images": ["assets/test-question.png"],
+        }
+        def tool(name: str, arguments: dict[str, object]) -> object:
+            if name == "get_weak_concepts":
+                return []
+            return question
+
+        with (
+            patch.object(chat_agent, "get_agent_memories", return_value=[]),
+            patch.object(
+                chat_agent,
+                "AITutor",
+                return_value=SimpleNamespace(enabled=False),
+            ),
+            patch.object(chat_agent, "call_agent_tool", side_effect=tool),
+        ):
+            stages = []
+            result = chat_agent.chat_turn(
+                state,
+                "给我出一道题",
+                progress_callback=stages.append,
+            )
+
+        self.assertEqual(result["current_question"]["id"], "chat-q1")
+        self.assertIn("请直接回复你的选项", result["messages"][-1]["content"])
+        self.assertIn("当前没有可用的薄弱点题目，正在从固定题库选择未做题", stages)
+        self.assertEqual(
+            result["messages"][-1]["question"]["question_images"],
+            ["assets/test-question.png"],
+        )
+
+    def test_generic_practice_checks_weaknesses_before_fixed_bank_question(self) -> None:
+        state = {"messages": [], "current_question": None}
+        weak = [
+            {
+                "concept_id": "kp:calculus:double-integral",
+                "concept": "二重积分",
+                "mastery": 0.25,
+            }
+        ]
+        question = {
+            "id": "double-integral-q1",
+            "section_title": "二重积分基础",
+            "question_number": 1,
+            "question_text": "计算二重积分。",
+            "options": [],
+            "question_images": [],
+        }
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        def tool(name: str, arguments: dict[str, object]) -> object:
+            calls.append((name, arguments))
+            if name == "get_weak_concepts":
+                return weak
+            if name == "choose_question_for_knowledge":
+                return question
+            raise AssertionError(f"不应调用工具：{name}")
+
+        with (
+            patch.object(chat_agent, "AITutor", return_value=SimpleNamespace(enabled=False)),
+            patch.object(chat_agent, "call_agent_tool", side_effect=tool),
+        ):
+            result = chat_agent.chat_turn(state, "能帮我出道题检验一下吗")
+
+        self.assertEqual(result["current_question"]["id"], "double-integral-q1")
+        self.assertEqual(
+            [name for name, _ in calls],
+            ["get_weak_concepts", "choose_question_for_knowledge"],
+        )
+        self.assertEqual(
+            calls[1][1]["knowledge_id"], "kp:calculus:double-integral"
+        )
+        self.assertEqual(result["tool_trace"][0]["tool"], "get_weak_concepts")
+
+    def test_natural_gap_filling_request_retrieves_a_fixed_bank_question(self) -> None:
+        state = {"messages": [], "current_question": None}
+        question = {
+            "id": "gap-fill-q1",
+            "section_title": "二重积分基础",
+            "question_number": 1,
+            "question_text": "计算二重积分。",
+            "options": [],
+            "question_images": [],
+        }
+
+        def tool(name: str, arguments: dict[str, object]) -> object:
+            if name == "get_weak_concepts":
+                return []
+            if name == "choose_daily_question":
+                return question
+            raise AssertionError(f"不应调用工具：{name}")
+
+        with (
+            patch.object(chat_agent, "AITutor", return_value=SimpleNamespace(enabled=False)),
+            patch.object(chat_agent, "call_agent_tool", side_effect=tool),
+        ):
+            result = chat_agent.chat_turn(state, "帮我查漏补缺")
+
+        self.assertEqual(result["current_question"]["id"], "gap-fill-q1")
+        self.assertIn("计算二重积分", result["messages"][-1]["content"])
+
+    def test_named_follow_up_inherits_an_unfinished_practice_request(self) -> None:
+        state = {
+            "messages": [
+                {"role": "assistant", "content": "你想练哪一章？"},
+                {"role": "user", "content": "出道题"},
+                {
+                    "role": "assistant",
+                    "content": "你可以继续告诉我想解决的学习问题。",
+                },
+            ],
+            "current_question": None,
+        }
+        question = {
+            "id": "double-integral-follow-up-q1",
+            "section_title": "二重积分",
+            "question_number": 1,
+            "question_text": "计算二重积分。",
+            "options": [],
+            "question_images": [],
+        }
+        self.assertEqual(
+            chat_agent._pending_practice_intent(state),
+            "practice_needs_topic",
+        )
+
+        with (
+            patch.object(chat_agent, "AITutor", return_value=SimpleNamespace(enabled=False)),
+            patch.object(chat_agent, "call_agent_tool", return_value=question) as tool,
+        ):
+            result = chat_agent.chat_turn(state, "二重积分")
+
+        self.assertEqual(result["last_action"], "practice")
+        self.assertEqual(
+            result["current_question"]["id"],
+            "double-integral-follow-up-q1",
+        )
+        tool.assert_called_once_with(
+            "choose_question_for_knowledge",
+            {
+                "knowledge_id": "kp:calculus:double-integral",
+                "exclude_ids": [""],
+            },
+        )
+
+    def test_chat_prefers_fixed_question_explanation_for_a_follow_up(self) -> None:
+        question = {
+            "id": "fixed-explanation-q1",
+            "section_title": "二重积分",
+            "question_number": 1,
+            "question_text": "计算题",
+            "answer_text": "固定解析：先确定积分区域，再选择积分次序。",
+            "answer_images": ["data/question_bank/example/answers/q001.webp"],
+        }
+        state = {
+            "messages": [
+                {"role": "assistant", "content": "如果需要进一步的解题步骤，请告诉我。"},
+                {"role": "user", "content": "是5吗"},
+                {"role": "assistant", "content": "答案需要结合题目条件判断。"},
+            ],
+            "current_question": question,
+        }
+
+        with patch.object(
+            chat_agent, "AITutor", return_value=SimpleNamespace(enabled=False)
+        ):
+            result = chat_agent.chat_turn(state, "需要")
+
+        self.assertEqual(result["last_action"], "explain_fixed_question")
+        self.assertIn("固定解析：先确定积分区域", result["messages"][-1]["content"])
+        self.assertEqual(
+            result["messages"][-1]["answer_images"],
+            ["data/question_bank/example/answers/q001.webp"],
+        )
+        self.assertEqual(result["current_question"]["id"], "fixed-explanation-q1")
+
+    def test_chat_does_not_fetch_question_for_ambiguous_confusion(self) -> None:
+        state = {"messages": [], "current_question": None}
+        tutor = SimpleNamespace(
+            enabled=True,
+            chat_agent_turn=lambda **_: {
+                "reply": "你可以告诉我想聊的内容。",
+                "next_action": "answer",
+                "memory": "",
+            },
+        )
+        with (
+            patch.object(chat_agent, "get_agent_memories", return_value=[]),
+            patch.object(chat_agent, "get_weak_concepts", return_value=[]),
+            patch.object(chat_agent, "AITutor", return_value=tutor),
+            patch.object(chat_agent, "call_agent_tool") as choose_question,
+        ):
+            result = chat_agent.chat_turn(state, "我也不知道哪里不懂")
+
+        choose_question.assert_not_called()
+        self.assertEqual(result["last_action"], "answer")
+
+    def test_chat_analyzes_weaknesses_before_waiting_for_a_natural_language_choice(self) -> None:
+        state = {"messages": [], "current_question": None}
+        weak = [
+            {
+                "concept": "条件概率与贝叶斯公式",
+                "mastery": 0.35,
+                "recent_attempts": 4,
+                "recent_accuracy": 0.25,
+                "wrong_count": 2,
+            }
+        ]
+        def tool(name: str, arguments: dict[str, object]) -> object:
+            self.assertEqual(name, "get_weak_concepts")
+            return weak
+
+        with (
+            patch.object(chat_agent, "call_agent_tool", side_effect=tool) as choose_question,
+            patch.object(
+                chat_agent,
+                "AITutor",
+                return_value=SimpleNamespace(
+                    enabled=True,
+                    chat_agent_turn=lambda **_: {
+                        "reply": "我根据答题记录先分析这一个薄弱点。",
+                        "next_action": "review_weakest",
+                        "memory": "",
+                        "target_knowledge_id": None,
+                    },
+                ),
+            ) as tutor,
+        ):
+            result = chat_agent.chat_turn(state, "分析一下我的薄弱点")
+
+        self.assertEqual(
+            [call.args[0] for call in choose_question.call_args_list],
+            ["get_weak_concepts"],
+        )
+        tutor.assert_called_once()
+        self.assertEqual(result["last_action"], "analyze_weakness")
+        self.assertIn("根据答题记录", result["messages"][-1]["content"])
+
+    def test_chat_recognizes_a_request_to_find_my_weaknesses(self) -> None:
+        state = {"messages": [], "current_question": None}
+        weak = [
+            {
+                "concept": "函数极限",
+                "mastery": 0.4,
+                "attempts": 5,
+                "recent_attempts": 2,
+                "recent_accuracy": 0.0,
+                "wrong_count": 2,
+            }
+        ]
+
+        with (
+            patch.object(chat_agent, "AITutor", return_value=SimpleNamespace(enabled=False)),
+            patch.object(
+                chat_agent,
+                "call_agent_tool",
+                return_value=weak,
+            ) as tool,
+        ):
+            result = chat_agent.chat_turn(state, "你能帮我找找我的弱点吗")
+
+        self.assertEqual(result["last_action"], "analyze_weakness")
+        self.assertIn("函数极限", result["messages"][-1]["content"])
+        tool.assert_called_once_with("get_weak_concepts", {"limit": 8})
+
+    def test_chat_sends_off_topic_conversation_to_llm_without_learning_context(self) -> None:
+        state = {"messages": [], "current_question": None}
+        tutor = SimpleNamespace(
+            enabled=True,
+            chat_agent_turn=lambda **kwargs: {
+                "reply": "听起来你只是想聊聊天，我在。",
+                "next_action": "answer",
+                "memory": "",
+                "target_knowledge_id": None,
+            },
+        )
+        with (
+            patch.object(chat_agent, "get_weak_concepts") as weak,
+            patch.object(chat_agent, "AITutor", return_value=tutor),
+        ):
+            stages: list[str] = []
+            result = chat_agent.chat_turn(
+                state,
+                "最近看了部电影，心情还不错",
+                progress_callback=stages.append,
+            )
+
+        weak.assert_not_called()
+        self.assertIn("只是想聊聊天", result["messages"][-1]["content"])
+        self.assertIn("正在结合最近对话理解你的问题", stages)
+        self.assertIn("正在组织与你当前问题相关的回复", stages)
+
+    def test_chat_passes_registered_tools_to_llm_router(self) -> None:
+        state = {"messages": [], "current_question": None}
+        captured: dict[str, object] = {}
+
+        def route(**kwargs: object) -> dict[str, object]:
+            captured.update(kwargs)
+            return {
+                "reply": "我先听你说说。",
+                "next_action": "answer",
+                "memory": "",
+                "target_knowledge_id": None,
+                "tool_name": None,
+                "tool_arguments": {},
+            }
+
+        with patch.object(
+            chat_agent,
+            "AITutor",
+            return_value=SimpleNamespace(enabled=True, chat_agent_turn=route),
+        ):
+            chat_agent.chat_turn(state, "最近看了部电影")
+
+        tools = captured.get("available_tools")
+        self.assertIsInstance(tools, list)
+        names = {item["name"] for item in tools}  # type: ignore[index]
+        self.assertIn("get_weak_concepts", names)
+        self.assertIn("choose_question_for_knowledge", names)
+        self.assertIn("choose_daily_question", names)
+
+    def test_chat_recognizes_natural_weakness_question(self) -> None:
+        state = {"messages": [], "current_question": None}
+        weak = [{"concept": "函数极限", "mastery": 0.4, "attempts": 3}]
+        with (
+            patch.object(chat_agent, "AITutor", return_value=SimpleNamespace(enabled=False)),
+            patch.object(chat_agent, "call_agent_tool", return_value=weak) as tool,
+        ):
+            result = chat_agent.chat_turn(state, "看看我哪里比较弱")
+
+        self.assertEqual(result["last_action"], "analyze_weakness")
+        tool.assert_called_once_with("get_weak_concepts", {"limit": 8})
+
+    def test_chat_executes_llm_weakness_tool_request_on_contextual_follow_up(self) -> None:
+        state = {
+            "messages": [
+                {"role": "user", "content": "我不知道我哪里掌握得不好"},
+                {"role": "assistant", "content": "你可以说帮我分析。"},
+            ],
+            "current_question": None,
+        }
+        weak = [{"concept": "二重积分", "mastery": 0.3, "attempts": 4}]
+        tutor = SimpleNamespace(
+            enabled=True,
+            chat_agent_turn=lambda **_: {
+                "reply": "我来根据答题记录分析你的薄弱点。",
+                "next_action": "review_weakest",
+                "memory": "",
+                "target_knowledge_id": None,
+                "tool_name": "get_weak_concepts",
+                "tool_arguments": {"limit": 8},
+            },
+        )
+        with (
+            patch.object(chat_agent, "AITutor", return_value=tutor),
+            patch.object(chat_agent, "call_agent_tool", return_value=weak) as tool,
+        ):
+            result = chat_agent.chat_turn(state, "帮我分析")
+
+        self.assertEqual(result["last_action"], "analyze_weakness")
+        tool.assert_called_once_with("get_weak_concepts", {"limit": 8})
+
+    def test_chat_uses_context_to_query_weaknesses_when_model_tool_field_is_missing(self) -> None:
+        state = {
+            "messages": [
+                {"role": "user", "content": "我不知道我哪里掌握得不好"},
+                {
+                    "role": "assistant",
+                    "content": "你想先分析薄弱点还是做一些诊断题呢？",
+                },
+            ],
+            "current_question": None,
+        }
+        weak = [{"concept": "多元函数积分学", "mastery": 0.33, "attempts": 6}]
+        tutor = SimpleNamespace(
+            enabled=True,
+            chat_agent_turn=lambda **_: {
+                "reply": "我正在分析你的学习记录。",
+                "next_action": "review_weakest",
+                "memory": "",
+                "target_knowledge_id": None,
+            },
+        )
+        with (
+            patch.object(chat_agent, "AITutor", return_value=tutor),
+            patch.object(chat_agent, "call_agent_tool", return_value=weak) as tool,
+        ):
+            result = chat_agent.chat_turn(state, "帮我分析")
+
+        self.assertEqual(result["last_action"], "analyze_weakness")
+        tool.assert_called_once_with("get_weak_concepts", {"limit": 8})
+
+    def test_chat_uses_llm_review_action_for_natural_learning_follow_up(self) -> None:
+        state = {
+            "messages": [
+                {"role": "user", "content": "我也不知道哪里差"},
+                {"role": "assistant", "content": "你可以选择答题记录。"},
+            ],
+            "current_question": None,
+        }
+        weak = [{"concept": "导数与微分的定义", "mastery": 0.62, "attempts": 8}]
+        tutor = SimpleNamespace(
+            enabled=True,
+            chat_agent_turn=lambda **_: {
+                "reply": "我先查看你的答题记录。",
+                "next_action": "review_weakest",
+                "memory": "",
+                "target_knowledge_id": None,
+            },
+        )
+        with (
+            patch.object(chat_agent, "AITutor", return_value=tutor),
+            patch.object(chat_agent, "call_agent_tool", return_value=weak) as tool,
+        ):
+            result = chat_agent.chat_turn(state, "答题记录")
+
+        self.assertEqual(result["last_action"], "analyze_weakness")
+        tool.assert_called_once_with("get_weak_concepts", {"limit": 8})
+
+    def test_chat_preserves_a_self_reported_topic_for_follow_up_analysis(self) -> None:
+        state = {"messages": [], "current_question": None}
+        with patch.object(
+            chat_agent,
+            "AITutor",
+            return_value=SimpleNamespace(enabled=False),
+        ):
+            reported = chat_agent.chat_turn(state, "微分方程学的一般")
+        self.assertEqual(
+            reported["self_reported_concepts"][0]["id"],
+            "kp:calculus:differential-equation",
+        )
+        self.assertIn("微分方程", reported["messages"][-1]["content"])
+
+        with (
+            patch.object(chat_agent, "get_weak_concepts", return_value=[]),
+            patch.object(
+                chat_agent,
+                "AITutor",
+                return_value=SimpleNamespace(enabled=False),
+            ),
+        ):
+            analyzed = chat_agent.chat_turn(reported, "分析一下我的薄弱点")
+
+        self.assertIn("微分方程", analyzed["messages"][-1]["content"])
+        self.assertIn("主观反馈", analyzed["messages"][-1]["content"])
+
+    def test_chat_uses_the_knowledge_point_when_requesting_a_question(self) -> None:
+        state = {"messages": [], "current_question": None}
+        question = {
+            "id": "differential-q1",
+            "section_title": "微分方程及其应用",
+            "question_number": 1,
+            "question_text": "测试题",
+            "options": ["A", "B"],
+            "question_images": [],
+        }
+        with (
+            patch.object(
+                chat_agent,
+                "AITutor",
+                return_value=SimpleNamespace(enabled=False),
+            ),
+            patch.object(chat_agent, "call_agent_tool", return_value=question) as tool,
+        ):
+            result = chat_agent.chat_turn(state, "给我做一道微分方程的题")
+
+        tool.assert_called_once_with(
+            "choose_question_for_knowledge",
+            {
+                "knowledge_id": "kp:calculus:differential-equation",
+                "exclude_ids": [""],
+            },
+        )
+        self.assertEqual(result["current_question"]["id"], "differential-q1")
+
+    def test_chat_treats_want_to_do_a_named_knowledge_point_as_practice(self) -> None:
+        state = {"messages": [], "current_question": None}
+        question = {
+            "id": "derivative-definition-q1",
+            "section_title": "导数与微分的定义",
+            "question_number": 1,
+            "question_text": "测试导数定义。",
+            "options": ["A", "B"],
+            "question_images": [],
+        }
+        with (
+            patch.object(chat_agent, "AITutor", return_value=SimpleNamespace(enabled=False)),
+            patch.object(chat_agent, "call_agent_tool", return_value=question) as tool,
+        ):
+            result = chat_agent.chat_turn(state, "我想做导数与微分的定义")
+
+        self.assertEqual(result["last_action"], "practice")
+        self.assertEqual(result["current_question"]["id"], "derivative-definition-q1")
+        tool.assert_called_once_with(
+            "choose_question_for_knowledge",
+            {
+                "knowledge_id": "kp:calculus:derivative-definition",
+                "exclude_ids": [""],
+            },
         )
 
 
@@ -250,6 +788,9 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(database.mastery_level(0.5)["name"], "熟练")
         self.assertEqual(database.mastery_level(0.8)["name"], "精通")
 
+    def test_weakness_analysis_ignores_unseen_seeded_concepts(self) -> None:
+        self.assertEqual(database.get_weak_concepts(), [])
+
     def test_topic_progress(self) -> None:
         database.save_topic_progress(
             "random-events", mastery=0.8, diagnostic_score=2 / 3, completed=True
@@ -372,6 +913,20 @@ class _FakeOpenAI:
         self.chat = SimpleNamespace(completions=self.completions)
 
 
+class _FakeNativeOpenAI:
+    def __init__(self, tool_name: str, arguments: dict) -> None:
+        function = SimpleNamespace(
+            name=tool_name,
+            arguments=__import__("json").dumps(arguments),
+        )
+        message = SimpleNamespace(content=None, tool_calls=[SimpleNamespace(function=function)])
+        self.chat = SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **kwargs: SimpleNamespace(choices=[SimpleNamespace(message=message)])
+            )
+        )
+
+
 class AIServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.context = {
@@ -446,6 +1001,105 @@ class AIServiceTests(unittest.TestCase):
         self.assertEqual(messages[-3]["content"], "我不理解第二步。")
         self.assertEqual(messages[-2]["content"], "先看替换条件。")
         self.assertEqual(messages[-1]["content"], "为什么这里可以等价替换？")
+
+    def test_daily_diagnosis_turn_returns_agent_action(self) -> None:
+        payload = """
+        {
+          "reply": "这道题需要先补一遍偏导数的基础。",
+          "next_action": "practice_prerequisite",
+          "target_knowledge_id": "kp:calculus:multivariable-derivative",
+          "gap": "偏导数基础不稳"
+        }
+        """
+        fake = _FakeOpenAI([payload])
+        tutor = AITutor(api_key="test", client=fake)
+        result = tutor.diagnose_question_turn(
+            question={
+                "section_title": "多元函数微分学",
+                "question_text": "求函数在某点的极值。",
+                "answer_text": "先求一阶偏导数。",
+            },
+            original_user_answer="我直接套了公式。",
+            user_message="我不知道为什么要先求偏导。",
+            knowledge_tags=[
+                {
+                    "id": "kp:calculus:multivariable-extreme",
+                    "title": "多元函数极值与条件极值",
+                    "relation": "direct",
+                }
+            ],
+            section_mastery={"attempts": 2, "accuracy": 0.5},
+            weak_prerequisites=[
+                {
+                    "id": "kp:calculus:multivariable-derivative",
+                    "title": "多元函数微分学",
+                    "mastery": {"attempts": 3, "accuracy": 0.33},
+                }
+            ],
+            prerequisite_mastery=[
+                {
+                    "id": "kp:calculus:multivariable-derivative",
+                    "title": "多元函数微分学",
+                    "mastery": {"attempts": 3, "accuracy": 0.33},
+                }
+            ],
+            dialogue=[],
+            support_results=[],
+        )
+        self.assertEqual(result["next_action"], "practice_prerequisite")
+        self.assertEqual(
+            result["target_knowledge_id"],
+            "kp:calculus:multivariable-derivative",
+        )
+        request = fake.completions.calls[0]["messages"][1]["content"]
+        self.assertIn("practice_prerequisite", request)
+        self.assertIn("practice_same_section", request)
+
+    def test_daily_diagnosis_turn_can_choose_same_section_question(self) -> None:
+        payload = """
+        {
+          "reply": "我从固定题库抽一道同章节题来检测一下。",
+          "next_action": "practice_same_section",
+          "target_knowledge_id": null,
+          "gap": "需要检测当前章节掌握情况"
+        }
+        """
+        fake = _FakeOpenAI([payload])
+        tutor = AITutor(api_key="test", client=fake)
+        result = tutor.diagnose_question_turn(
+            question={"section_title": "函数极限", "question_text": "求极限。"},
+            original_user_answer="不会。",
+            user_message="能出一道题测试我吗？",
+            knowledge_tags=[],
+            section_mastery={"attempts": 0, "accuracy": 0.0},
+            weak_prerequisites=[],
+            prerequisite_mastery=[],
+            dialogue=[],
+            support_results=[],
+        )
+        self.assertEqual(result["next_action"], "practice_same_section")
+
+    def test_native_function_calling_returns_registered_tool_call(self) -> None:
+        tutor = AITutor(
+            api_key="test",
+            client=_FakeNativeOpenAI(
+                "search_prerequisite_questions",
+                {"target_knowledge_id": "kp:derivative", "limit": 1},
+            ),
+        )
+        result = tutor.diagnose_question_turn_native(
+            question={"section_title": "导数", "question_text": "求导。"},
+            original_user_answer="不会",
+            user_message="先给我一道前置题",
+            knowledge_tags=[],
+            section_mastery={},
+            weak_prerequisites=[],
+            prerequisite_mastery=[],
+            dialogue=[],
+            support_results=[],
+        )
+        self.assertEqual(result["tool_name"], "search_prerequisite_questions")
+        self.assertEqual(result["next_action"], "practice_prerequisite")
 
     def test_question_dialogue_summary_uses_only_dialogue_insights(self) -> None:
         payload = """

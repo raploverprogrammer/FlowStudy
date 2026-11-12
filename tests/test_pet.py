@@ -24,7 +24,7 @@ class LuluPetTests(unittest.TestCase):
         self.assertIn("previous.remove()", html)
         self.assertIn("__flowstudyLuluCleanup", html)
         self.assertIn("粉粉加油！", html)
-        self.assertIn("data:image/png;base64,", html)
+        self.assertIn("/app/static/lulu/images/pet-transparent.png", html)
         iframe_mock.assert_called_once_with(html, width=1, height=1)
 
     @patch("flowstudy.pet.st.iframe")

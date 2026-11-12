@@ -26,6 +26,15 @@ LULU_LEARNING_SCENE = ASSETS_DIR / "scenes" / "learning-telescope.webp"
 LULU_WRONG_SCENE = ASSETS_DIR / "scenes" / "wrong-reef.webp"
 LULU_LOG_SCENE = ASSETS_DIR / "scenes" / "log-journal.webp"
 LULU_FAVORITES_SCENE = ASSETS_DIR / "scenes" / "favorites-treasure.webp"
+LULU_WELCOME_PORTRAIT = ASSETS_DIR / "scenes" / "lulu-welcome-portrait.webp"
+LULU_WELCOME_LANDSCAPE = ASSETS_DIR / "scenes" / "lulu-welcome-landscape.webp"
+LULU_CHAT_SCENE = ASSETS_DIR / "scenes" / "lulu-chat-graffiti-desktop.webp"
+
+
+def static_asset_url(path: Path) -> str:
+    """Return the browser URL for an asset mirrored under the static folder."""
+    relative = path.relative_to(ASSETS_DIR).as_posix()
+    return f"/app/static/lulu/{relative}"
 
 
 def get_secret(name: str, default: str = "") -> str:

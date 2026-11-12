@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import base64
+from concurrent.futures import ThreadPoolExecutor
 import json
-import mimetypes
 import re
 import time
 from html import escape
+from pathlib import Path
 from typing import Any
 
 import streamlit as st
@@ -33,6 +33,7 @@ from flowstudy.config import (
     LULU_TUTOR_IMAGE,
     LULU_WRONG_SCENE,
     USER_AVATAR_IMAGE,
+    static_asset_url,
 )
 from flowstudy.database import (
     add_tutor_message,
@@ -68,12 +69,20 @@ from flowstudy.database import (
     update_concept_mastery,
     update_tutor_context,
 )
+from flowstudy.chat_agent import chat_turn, start_chat
+from flowstudy.agent_trace import trace_to_progress
 from flowstudy.media import render_cropped_video
-from flowstudy.react_agent import advance_repair, finish_repair, start_repair
+from flowstudy.react_agent import (
+    close_diagnosis,
+    diagnose_turn,
+    start_diagnosis,
+)
 from services.ai_service import AIServiceError, AITutor
 
 
 IDLE_TIMEOUT_SECONDS = 300
+LULU_CHAT_TIMEOUT_SECONDS = 150
+_LULU_CHAT_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="lulu-chat")
 
 
 def sync_study_timer(page: str) -> None:
@@ -103,6 +112,7 @@ def _touch_activity(topic_id: str) -> bool:
 
 def _go_learning(concept_key: str | None = None) -> None:
     st.session_state["app_view"] = "learning"
+    st.query_params["page"] = "learning"
     st.session_state["learning_mode"] = "bank" if concept_key else "tree"
     st.session_state.pop("completed_summary_id", None)
     st.session_state.pop("growth_reward", None)
@@ -112,11 +122,20 @@ def _go_learning(concept_key: str | None = None) -> None:
 
 def _go_daily() -> None:
     st.session_state["app_view"] = "daily"
+    st.query_params["page"] = "daily"
     st.session_state.pop("daily_session", None)
+
+
+def _go_lulu_chat() -> None:
+    st.session_state["app_view"] = "lulu_chat"
+    st.query_params["page"] = "lulu_chat"
+    if "lulu_chat" not in st.session_state:
+        st.session_state["lulu_chat"] = start_chat()
 
 
 def _resume_learning(session_id: int) -> None:
     st.session_state["app_view"] = "learning"
+    st.query_params["page"] = "learning"
     st.session_state["active_tutor_session_id"] = session_id
     st.session_state["learning_mode"] = "tutor"
     st.session_state.pop("completed_summary_id", None)
@@ -124,21 +143,88 @@ def _resume_learning(session_id: int) -> None:
 
 def _go_home() -> None:
     st.session_state["app_view"] = "home"
+    st.query_params["page"] = "home"
 
 
 def _go_reefs() -> None:
     st.session_state["app_view"] = "reefs"
+    st.query_params["page"] = "reefs"
 
 
 def _go_treasures() -> None:
     st.session_state["app_view"] = "treasures"
+    st.query_params["page"] = "treasures"
+
+
+def _go_page(page: str) -> None:
+    if page != "lulu_chat":
+        _discard_lulu_chat()
+    st.session_state["app_view"] = page
+    if page == "learning":
+        st.session_state["learning_mode"] = "tree"
+        st.session_state.pop("bank_session", None)
+        st.session_state.pop("requested_section_id", None)
+    st.query_params["page"] = page
+
+
+def _discard_lulu_chat() -> None:
+    pending = st.session_state.pop("lulu_chat_pending", None)
+    future = pending.get("future") if isinstance(pending, dict) else None
+    if future is not None and hasattr(future, "cancel"):
+        future.cancel()
+    st.session_state.pop("lulu_chat", None)
+    st.session_state.pop("lulu_open_question", None)
+
+
+def _question_image_path(value: object) -> Path | None:
+    """Resolve a bank image without allowing an arbitrary filesystem path."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    candidate = (BASE_DIR / value.strip()).resolve()
+    try:
+        candidate.relative_to(BASE_DIR.resolve())
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
 
 
 @st.cache_data(show_spinner=False)
-def _image_data_uri(path: Any) -> str:
-    mime = mimetypes.guess_type(str(path))[0] or "image/png"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{encoded}"
+def _load_question_image(path: str, modified_ns: int) -> bytes:
+    """Cache the bytes so reopening a question does not rebuild its media."""
+    return Path(path).read_bytes()
+
+
+def _render_back_arrow(parent_page: str, key: str) -> None:
+    """Render the small parent-menu control shared by content pages."""
+    with st.container(key=f"page_back_{key}"):
+        st.button(
+            "←",
+            key=f"page_back_button_{key}",
+            width="content",
+            on_click=_go_page,
+            args=(parent_page,),
+        )
+
+
+def _page_link(
+    label: str,
+    page: str,
+    *,
+    primary: bool = False,
+    circle: bool = False,
+) -> None:
+    def navigate() -> None:
+        # Keep navigation inside the current Streamlit session. A normal href
+        # reloads the whole document and needlessly recreates every component.
+        _go_page(page)
+
+    st.button(
+        label,
+        key=f"page_link_{page}_{'circle' if circle else 'bar'}",
+        type="primary" if primary else "secondary",
+        width="content" if circle else "stretch",
+        on_click=navigate,
+    )
 
 
 def _render_ocean_hero(
@@ -148,7 +234,7 @@ def _render_ocean_hero(
     title: str,
     subtitle: str,
 ) -> Any:
-    image_uri = _image_data_uri(image)
+    image_uri = static_asset_url(image)
     st.markdown(
         f"""
         <style>
@@ -223,7 +309,28 @@ def _render_growth_tree(show_title: bool = True) -> None:
     )
 
 
+def render_welcome() -> None:
+    """Minimal first screen: the pet and the two real starting points."""
+    st.markdown(
+        """
+        <div class="welcome-page">
+            <div class="welcome-copy">
+                <h1>和噜噜一起学习</h1>
+                <p>今天想聊聊，还是开始刷题？</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    left, right = st.columns(2)
+    with left:
+        _page_link("和噜噜聊聊", "lulu_chat", circle=True)
+    with right:
+        _page_link("开始刷题", "home", primary=True, circle=True)
+
+
 def render_home() -> None:
+    _render_back_arrow("welcome", "home")
     st.markdown(
         '<div class="home-background-boost"></div>',
         unsafe_allow_html=True,
@@ -235,12 +342,7 @@ def render_home() -> None:
         st.caption(
             "从错题或掌握较弱的章节中抽取一道题。答错后，噜噜会启动有限的知识补全流程。"
         )
-        st.button(
-            "开始每日一题",
-            type="primary",
-            width="stretch",
-            on_click=_go_daily,
-        )
+        _page_link("开始每日一题", "daily", primary=True)
 
     explore_copy = _render_ocean_hero(
         "home",
@@ -250,12 +352,7 @@ def render_home() -> None:
         "打开完整知识海图，看看每座岛屿的掌握情况，再选择今天想探索的地方。",
     )
     with explore_copy:
-        st.button(
-            "开始探索",
-            type="primary",
-            width="stretch",
-            on_click=_go_learning,
-        )
+        _page_link("开始探索", "learning", primary=True)
 
     reef_copy = _render_ocean_hero(
         "home_reefs",
@@ -265,12 +362,7 @@ def render_home() -> None:
         "回看曾经卡住的题目，先重新作答，再把真正的原因弄明白。",
     )
     with reef_copy:
-        st.button(
-            "查看触礁记录",
-            type="primary",
-            width="stretch",
-            on_click=_go_reefs,
-        )
+        _page_link("查看触礁记录", "reefs", primary=True)
 
     treasure_copy = _render_ocean_hero(
         "home_treasures",
@@ -280,12 +372,206 @@ def render_home() -> None:
         "学习总结、顿悟和重要反思都收藏在这里，需要时再回来看看。",
     )
     with treasure_copy:
-        st.button(
-            "打开宝箱",
-            type="primary",
-            width="stretch",
-            on_click=_go_treasures,
-        )
+        _page_link("打开宝箱", "treasures", primary=True)
+
+
+def _format_elapsed(seconds: float) -> str:
+    """Format the live agent duration without exposing internal reasoning."""
+    elapsed = max(0, int(seconds))
+    minutes, remainder = divmod(elapsed, 60)
+    if minutes:
+        return f"{minutes}分{remainder:02d}秒"
+    return f"{remainder}秒"
+
+
+@st.fragment(run_every="500ms")
+def _poll_lulu_chat() -> None:
+    job = st.session_state.get("lulu_chat_pending")
+    if job is None:
+        return
+    future = job["future"]
+    if not future.done():
+        with st.chat_message("assistant", avatar=str(LULU_TUTOR_IMAGE)):
+            stages: list[str] = []
+            for event in job.get("trace_events", []):
+                label = trace_to_progress(event)
+                if not stages or stages[-1] != label:
+                    stages.append(label)
+            if not stages:
+                stages = list(job.get("stages", []))
+            stages = stages[-6:]
+            current_stage = stages[-1] if stages else job.get("stage", "噜噜正在思考")
+            elapsed = _format_elapsed(
+                time.monotonic() - float(job.get("started_at", time.monotonic()))
+            )
+            st.markdown(f"⌛ {current_stage}（已思考 {elapsed}）…")
+            for stage in stages[:-1]:
+                st.caption(f"✓ {stage}")
+        if time.monotonic() - float(job.get("started_at", time.monotonic())) > LULU_CHAT_TIMEOUT_SECONDS:
+            future.cancel()
+            st.session_state.pop("lulu_chat_pending", None)
+            chat_state = st.session_state.get("lulu_chat", {})
+            chat_state["messages"] = [
+                item for item in chat_state.get("messages", []) if not item.get("pending")
+            ]
+            st.session_state["lulu_chat"] = chat_state
+            st.session_state["lulu_chat_error"] = "噜噜这次响应超时了，请稍后重新发送。"
+            st.rerun()
+        return
+    st.session_state.pop("lulu_chat_pending", None)
+    try:
+        st.session_state["lulu_chat"] = future.result()
+    except Exception as exc:
+        chat_state = st.session_state.get("lulu_chat", {})
+        chat_state["messages"] = [
+            item for item in chat_state.get("messages", []) if not item.get("pending")
+        ]
+        st.session_state["lulu_chat"] = chat_state
+        st.session_state["lulu_chat_error"] = f"噜噜这次没有完成请求：{exc}"
+        st.rerun()
+        return
+    st.rerun()
+
+
+def _run_lulu_chat(
+    job: dict[str, Any], state: dict[str, Any], user_message: str
+) -> dict[str, Any]:
+    def update_progress(stage: str) -> None:
+        job["stage"] = stage
+        stages = job.setdefault("stages", [])
+        if not stages or stages[-1] != stage:
+            stages.append(stage)
+
+    def update_trace(event: dict[str, Any]) -> None:
+        job.setdefault("trace_events", []).append(event)
+        update_progress(trace_to_progress(event))
+
+    return chat_turn(
+        state,
+        user_message,
+        append_user=False,
+        progress_callback=update_progress,
+        trace_callback=update_trace,
+    )
+
+
+def render_lulu_chat() -> None:
+    _render_back_arrow("welcome", "chat")
+    st.markdown('<div class="lulu-chat-page"></div>', unsafe_allow_html=True)
+    state = st.session_state.get("lulu_chat")
+    if state is None:
+        state = start_chat()
+        st.session_state["lulu_chat"] = state
+
+    # Process the submitted message before drawing the history. Streamlit already
+    # reruns the page for chat_input, so a second full rerun only delays the
+    # user's bubble and the thinking indicator.
+    message = st.chat_input(
+        "输入消息，按回车发送",
+        disabled=st.session_state.get("lulu_chat_pending") is not None,
+    )
+    if message is not None:
+        if not message.strip():
+            st.warning("先写下你想问噜噜的内容。")
+        else:
+            user_message = message.strip()
+            user_entry = {"role": "user", "content": user_message}
+            progress_entry = {
+                "role": "assistant",
+                "content": "⌛ 噜噜正在思考，请稍候…",
+                "pending": True,
+            }
+            previous_messages = list(state.get("messages", []))
+            state = {
+                **state,
+                "messages": previous_messages + [user_entry, progress_entry],
+            }
+            st.session_state["lulu_chat"] = state
+            worker_state = {
+                **state,
+                "messages": previous_messages + [user_entry],
+            }
+            job = {
+                "started_at": time.monotonic(),
+                "stage": "正在理解你的请求",
+                "stages": ["正在理解你的请求"],
+                "trace_events": [],
+            }
+            job["future"] = _LULU_CHAT_EXECUTOR.submit(
+                _run_lulu_chat,
+                job,
+                worker_state,
+                user_message,
+            )
+            st.session_state["lulu_chat_pending"] = job
+
+    chat_error = st.session_state.pop("lulu_chat_error", None)
+    if chat_error:
+        st.error(chat_error)
+
+    for message_index, message in enumerate(state.get("messages", [])):
+        if message.get("pending"):
+            continue
+        role = message.get("role", "assistant")
+        avatar = str(USER_AVATAR_IMAGE) if role == "user" else str(LULU_TUTOR_IMAGE)
+        with st.chat_message(role, avatar=avatar):
+            st.markdown(_chat_markdown(message.get("content", "")))
+            question = message.get("question")
+            if isinstance(question, dict):
+                # Use the same image list as the刷题页. Do not rebuild it from
+                # crops or generate a second composite image here.
+                image_paths = question.get("question_images") or []
+                valid_image_paths = [
+                    image_path
+                    for image_path in (_question_image_path(path) for path in image_paths)
+                    if image_path is not None
+                ]
+                rendered_image = bool(valid_image_paths)
+                question_key = f"lulu-question-{message_index}"
+                opened_question = st.session_state.get("lulu_open_question")
+                if valid_image_paths:
+                    if st.button(
+                        "收起完整原题"
+                        if opened_question == question_key
+                        else "点击查看完整原题",
+                        key=question_key,
+                        use_container_width=False,
+                    ):
+                        st.session_state["lulu_open_question"] = (
+                            None if opened_question == question_key else question_key
+                        )
+                        st.rerun()
+                    if opened_question == question_key:
+                        # Keep one viewer control while showing the same source
+                        # images that the刷题页 uses, in their stored order.
+                        with st.container(
+                            key=f"lulu_question_viewer_{message_index}",
+                            border=True,
+                        ):
+                            for image_path in valid_image_paths:
+                                try:
+                                    image_bytes = _load_question_image(
+                                        str(image_path), image_path.stat().st_mtime_ns
+                                    )
+                                except OSError:
+                                    st.error("原题图片暂时无法读取，请收起后重试。")
+                                else:
+                                    st.image(image_bytes, width="stretch")
+                if not rendered_image and question.get("question_text"):
+                    st.markdown(_chat_markdown(question["question_text"]))
+            for answer_path in message.get("answer_images", []) or []:
+                image_path = _question_image_path(answer_path)
+                if image_path is not None:
+                    try:
+                        st.image(
+                            _load_question_image(
+                                str(image_path), image_path.stat().st_mtime_ns
+                            ),
+                            width="stretch",
+                        )
+                    except OSError:
+                        st.warning("固定解析图片暂时无法读取，请稍后重试。")
+    _poll_lulu_chat()
 
 def _new_tutor_session(concept_key: str | None = None) -> int:
     if concept_key:
@@ -520,7 +806,7 @@ def _render_completed_summary(summary_id: int) -> None:
     render_cropped_video(LULU_FINISH_VIDEO)
     _render_growth_reward(st.session_state.get("growth_reward"))
     st.subheader("噜噜给你的学习总结")
-    st.markdown(summary["content"])
+    st.markdown(_chat_markdown(summary["content"]))
     favorite = st.toggle(
         "收藏这份总结",
         value=bool(summary["favorited"]),
@@ -590,10 +876,6 @@ def _section_rank(section: dict[str, Any]) -> str:
 
 
 def _render_topic_tree() -> None:
-    if st.button("← 返回首页", key="tree_back_home"):
-        _go_home()
-        st.rerun()
-
     hero_copy = _render_ocean_hero(
         "learning",
         LULU_LEARNING_SCENE,
@@ -775,14 +1057,14 @@ def _render_question_tutor(
             else str(LULU_TUTOR_IMAGE)
         )
         with st.chat_message(message["role"], avatar=avatar):
-            st.markdown(message["content"])
+            st.markdown(_chat_markdown(message["content"]))
 
     if summary_id:
         summary = get_summary(int(summary_id))
         if summary:
             for path in json.loads(summary["question_images_json"] or "[]"):
                 st.image(str(BASE_DIR / path), width="stretch")
-            st.markdown(summary["content"])
+            st.markdown(_chat_markdown(summary["content"]))
             favorite = st.toggle(
                 "收藏这份总结",
                 value=bool(summary["favorited"]),
@@ -1047,21 +1329,7 @@ def _daily_record_initial(
     if is_correct:
         session["mode"] = "correct"
     else:
-        with st.status("噜噜正在分析这次答错…", expanded=True) as progress_status:
-            repair = start_repair(
-                daily_session_id=int(session["daily_session_id"]),
-                original_question=question,
-                original_user_answer=user_answer,
-                asked_ids=list(session.get("asked_ids", [])),
-                progress=progress_status.write,
-            )
-            progress_status.update(
-                label="补充学习路径已准备好",
-                state="complete",
-                expanded=False,
-            )
-        session["repair"] = repair
-        session["mode"] = repair["status"]
+        session["mode"] = "wrong"
     _persist_daily(session)
 
 
@@ -1123,52 +1391,200 @@ def _render_daily_correct(session: dict[str, Any]) -> None:
     if right.button("结束今日练习", key="daily_finish"):
         _persist_daily(session, "complete")
         st.session_state.pop("daily_session", None)
-        st.session_state["app_view"] = "home"
+        _go_home()
         st.rerun()
 
 
-def _advance_daily_repair(
+def _render_daily_wrong(session: dict[str, Any]) -> None:
+    question = session["question"]
+    st.image(str(LULU_INCORRECT_IMAGE), width=150)
+    st.error("回答错误")
+    st.markdown(
+        "这道题已经记录到错题档案。先不要急着看答案，点击下面的按钮，让噜噜通过对话定位真正的错因。"
+    )
+    with st.container(border=True):
+        st.markdown("### 本题")
+        _render_daily_question_media(question)
+        st.caption(f"你的答案：{session.get('initial_answer', '未记录')}")
+    left, right = st.columns(2)
+    if left.button("错因诊断", type="primary", key="daily_diagnose_start", width="stretch"):
+        try:
+            with st.spinner("噜噜正在读取题目标签和你的学习记录…"):
+                diagnosis = start_diagnosis(
+                    daily_session_id=int(session["daily_session_id"]),
+                    original_question=question,
+                    original_user_answer=str(session.get("initial_answer", "")),
+                )
+            session["diagnosis"] = diagnosis
+            session["mode"] = "diagnosis"
+            _persist_daily(session)
+            st.rerun()
+        except AIServiceError as exc:
+            st.error(str(exc))
+    if right.button("先看参考答案", key="daily_wrong_answer", width="stretch"):
+        session["mode"] = "wrong_answer"
+        _persist_daily(session)
+        st.rerun()
+
+
+def _render_daily_wrong_answer(session: dict[str, Any]) -> None:
+    question = session["question"]
+    st.markdown("### 参考答案与解析")
+    _render_daily_answer_media(question)
+    if st.button("进入错因诊断", type="primary", key="daily_wrong_answer_diagnose"):
+        try:
+            diagnosis = start_diagnosis(
+                daily_session_id=int(session["daily_session_id"]),
+                original_question=question,
+                original_user_answer=str(session.get("initial_answer", "")),
+            )
+            session["diagnosis"] = diagnosis
+            session["mode"] = "diagnosis"
+            _persist_daily(session)
+            st.rerun()
+        except AIServiceError as exc:
+            st.error(str(exc))
+
+
+def _daily_diagnosis_turn(session: dict[str, Any], user_message: str) -> None:
+    diagnosis = session["diagnosis"]
+    try:
+        with st.spinner("噜噜正在根据刚才的回答决定下一步…"):
+            diagnosis = diagnose_turn(
+                state=diagnosis,
+                user_message=user_message,
+            )
+        session["diagnosis"] = diagnosis
+        session["mode"] = diagnosis["status"]
+        _persist_daily(session)
+        st.rerun()
+    except AIServiceError as exc:
+        st.error(str(exc))
+
+
+def _render_daily_diagnosis_chat(session: dict[str, Any]) -> None:
+    diagnosis = session["diagnosis"]
+    question = session["question"]
+    with st.container(border=True):
+        st.markdown("### 噜噜正在诊断这道题")
+        _render_daily_question_media(question)
+        st.caption(f"你的答案：{session.get('initial_answer', '未记录')}")
+
+    _render_react_trace(diagnosis.get("trace", []), expanded=True)
+    _render_diagnosis_source(diagnosis)
+    mastery_rows = diagnosis.get("prerequisite_mastery", [])
+    if mastery_rows:
+        st.markdown("### 前置知识掌握度")
+        for item in mastery_rows:
+            mastery = item["mastery"]
+            attempts = int(mastery.get("attempts", 0))
+            accuracy = (
+                f"{float(mastery.get('accuracy', 0.0)):.0%}"
+                if attempts
+                else "暂无记录"
+            )
+            st.markdown(f"- **{item['title']}**：已答 {attempts} 次，正确率 {accuracy}")
+        st.caption(
+            "这些掌握度会作为噜噜的判断依据，接下来由噜噜根据你的回答决定是解释、追问还是安排题目。"
+        )
+    for message in diagnosis.get("dialogue", []):
+        avatar = (
+            str(USER_AVATAR_IMAGE)
+            if message.get("role") == "user"
+            else str(LULU_TUTOR_IMAGE)
+        )
+        with st.chat_message(message.get("role", "assistant"), avatar=avatar):
+            st.markdown(_chat_markdown(message.get("content", "")))
+
+    with st.form("daily_diagnosis_form", clear_on_submit=True):
+        message = st.text_area(
+            "告诉噜噜你卡在哪里",
+            placeholder="例如：我不知道为什么这里要先求偏导……",
+        )
+        submitted = st.form_submit_button("发送给噜噜", type="primary")
+    if submitted:
+        if not message.strip():
+            st.warning("先写下你的疑问或刚才的解题思路。")
+        else:
+            _daily_diagnosis_turn(session, message.strip())
+
+    if diagnosis.get("dialogue") and st.button(
+        "结束诊断并生成总结",
+        key="daily_diagnosis_finish",
+        width="stretch",
+    ):
+            _finish_daily_diagnosis(session)
+
+
+def _render_diagnosis_source(diagnosis: dict[str, Any]) -> None:
+    source = diagnosis.get("last_decision_source", "尚未产生决策")
+    if source == "DeepSeek Agent":
+        st.success("本轮决策来源：DeepSeek Agent")
+    elif source.startswith("本地 Agent"):
+        st.warning(f"本轮决策来源：{source}")
+    else:
+        st.info(f"本轮决策来源：{source}")
+    step_count = int(diagnosis.get("agent_steps", 0))
+    tool_duration = diagnosis.get("last_tool_duration_ms")
+    if step_count or tool_duration:
+        timing = f"已完成 {step_count} 轮判断"
+        if tool_duration:
+            timing += f"，最近一次工具查询耗时 {float(tool_duration):.0f} ms"
+        st.caption(timing)
+    history = diagnosis.get("decision_sources", [])
+    if len(history) > 1:
+        with st.expander("查看每轮决策来源"):
+            for index, item in enumerate(history, start=1):
+                st.markdown(f"第 {index} 轮：{item}")
+
+
+def _record_daily_diagnosis_result(
     session: dict[str, Any],
-    support_question: dict[str, Any],
+    question: dict[str, Any],
     user_answer: str,
     is_correct: bool,
+    attempt_type: str,
 ) -> None:
-    record_question_bank_attempt(
-        support_question,
-        user_answer,
-        is_correct,
-        "react_support",
+    record_question_bank_attempt(question, user_answer, is_correct, attempt_type)
+    diagnosis = session["diagnosis"]
+    diagnosis.setdefault("support_results", []).append(
+        {
+            "question_id": question["id"],
+            "section_title": question["section_title"],
+            "is_correct": bool(is_correct),
+        }
     )
-    with st.status("噜噜正在根据这道补充题调整学习路径…", expanded=True) as progress_status:
-        repair = advance_repair(
-            state=session["repair"],
-            support_question=support_question,
-            user_answer=user_answer,
-            is_correct=is_correct,
-            progress=progress_status.write,
-        )
-        progress_status.update(
-            label="下一步学习安排已更新",
-            state="complete",
-            expanded=False,
-        )
-    session["repair"] = repair
-    session["mode"] = repair["status"]
-    session["asked_ids"] = repair.get("asked_ids", session.get("asked_ids", []))
-    _persist_daily(session)
+    diagnosis["current_question"] = None
+    session["diagnosis"] = diagnosis
+    result_text = (
+        f"我完成了「{question['section_title']}·第{question['question_number']}题」，"
+        f"这道补充题我答{'对' if is_correct else '错'}了。"
+    )
+    _daily_diagnosis_turn(session, result_text)
 
 
-def _render_daily_repair_question(session: dict[str, Any]) -> None:
-    repair = session["repair"]
-    question = repair.get("current_question")
-    _render_react_trace(repair.get("trace", []), expanded=True)
-    st.info(repair.get("message") or "噜噜正在安排一道人知识补充题。")
-    st.caption(f"当前补充题：{question['section_title']}")
+def _render_daily_diagnosis_support(session: dict[str, Any]) -> None:
+    diagnosis = session["diagnosis"]
+    question = diagnosis.get("current_question")
+    if not question:
+        session["mode"] = "diagnosis"
+        _persist_daily(session)
+        st.rerun()
+        return
+    _render_react_trace(diagnosis.get("trace", []), expanded=True)
+    _render_diagnosis_source(diagnosis)
+    scope_label = (
+        "前置知识"
+        if question.get("repair_scope") == "prerequisite"
+        else "同章节"
+    )
+    st.info(f"噜噜根据刚才的诊断安排了一道{scope_label}题。做完后会继续回到诊断对话。")
+    st.caption(f"补充题：{question['section_title']} · 第{question['question_number']}题")
     _render_daily_question_media(question)
-    pending = session.get("repair_pending_answer")
+    pending = session.get("diagnosis_support_pending")
     if not pending:
-        user_answer = _daily_question_widget(question, "daily_repair_answer")
-        if st.button("提交补充题", type="primary", key="daily_repair_submit"):
+        user_answer = _daily_question_widget(question, "daily_diagnosis_support")
+        if st.button("提交补充题", type="primary", key="daily_diagnosis_support_submit"):
             if not user_answer.strip():
                 st.warning("先写下答案或思路。")
             elif question["auto_gradable"] and (
@@ -1176,37 +1592,40 @@ def _render_daily_repair_question(session: dict[str, Any]) -> None:
             ):
                 expected = question["answer_choice"] or question["answer_text"]
                 is_correct = _normal_answer(user_answer) == _normal_answer(expected)
-                _advance_daily_repair(session, question, user_answer, is_correct)
-                st.rerun()
+                _record_daily_diagnosis_result(
+                    session, question, user_answer, is_correct, "react_diagnosis_support"
+                )
             else:
-                session["repair_pending_answer"] = user_answer
+                session["diagnosis_support_pending"] = user_answer
                 _persist_daily(session)
                 st.rerun()
     else:
         st.markdown("### 参考答案与解析")
         _render_daily_answer_media(question)
         left, right = st.columns(2)
-        if left.button("补充题答对了", key="daily_repair_right", width="stretch"):
-            _advance_daily_repair(session, question, str(pending), True)
-            session.pop("repair_pending_answer", None)
-            st.rerun()
-        if right.button("补充题仍需复习", key="daily_repair_wrong", width="stretch"):
-            _advance_daily_repair(session, question, str(pending), False)
-            session.pop("repair_pending_answer", None)
-            st.rerun()
+        if left.button("补充题答对了", key="daily_diagnosis_support_right", width="stretch"):
+            answer = str(session.pop("diagnosis_support_pending"))
+            _record_daily_diagnosis_result(
+                session, question, answer, True, "react_diagnosis_support"
+            )
+        if right.button("补充题仍需复习", key="daily_diagnosis_support_wrong", width="stretch"):
+            answer = str(session.pop("diagnosis_support_pending"))
+            _record_daily_diagnosis_result(
+                session, question, answer, False, "react_diagnosis_support"
+            )
 
 
-def _render_daily_original_retest(session: dict[str, Any]) -> None:
-    repair = session["repair"]
+def _render_daily_diagnosis_retest(session: dict[str, Any]) -> None:
+    diagnosis = session["diagnosis"]
     question = session["question"]
-    _render_react_trace(repair.get("trace", []), expanded=True)
-    st.info(repair.get("message") or "补充练习完成，现在回到原题验证。")
-    st.markdown("### 回到原题")
+    _render_react_trace(diagnosis.get("trace", []), expanded=True)
+    _render_diagnosis_source(diagnosis)
+    st.info("噜噜认为可以回到原题验证了。请重新作答，不必追求一次写得很完整。")
     _render_daily_question_media(question)
-    pending = session.get("retest_pending_answer")
+    pending = session.get("diagnosis_retest_pending")
     if not pending:
-        user_answer = _daily_question_widget(question, "daily_retest_answer")
-        if st.button("提交原题验证", type="primary", key="daily_retest_submit"):
+        user_answer = _daily_question_widget(question, "daily_diagnosis_retest")
+        if st.button("提交原题验证", type="primary", key="daily_diagnosis_retest_submit"):
             if not user_answer.strip():
                 st.warning("先写下答案或思路。")
             elif question["auto_gradable"] and (
@@ -1214,95 +1633,84 @@ def _render_daily_original_retest(session: dict[str, Any]) -> None:
             ):
                 expected = question["answer_choice"] or question["answer_text"]
                 is_correct = _normal_answer(user_answer) == _normal_answer(expected)
-                _finish_daily_repair(session, user_answer, is_correct)
-                st.rerun()
+                if is_correct:
+                    resolve_wrong_question(question["id"])
+                _record_daily_diagnosis_result(
+                    session, question, user_answer, is_correct, "react_diagnosis_retest"
+                )
             else:
-                session["retest_pending_answer"] = user_answer
+                session["diagnosis_retest_pending"] = user_answer
                 _persist_daily(session)
                 st.rerun()
     else:
         st.markdown("### 参考答案与解析")
         _render_daily_answer_media(question)
         left, right = st.columns(2)
-        if left.button("原题已经弄明白", key="daily_retest_right", width="stretch"):
-            _finish_daily_repair(session, str(pending), True)
-            session.pop("retest_pending_answer", None)
-            st.rerun()
-        if right.button("原题仍需复习", key="daily_retest_wrong", width="stretch"):
-            _finish_daily_repair(session, str(pending), False)
-            session.pop("retest_pending_answer", None)
-            st.rerun()
+        if left.button("原题已经弄明白", key="daily_diagnosis_retest_right", width="stretch"):
+            answer = str(session.pop("diagnosis_retest_pending"))
+            resolve_wrong_question(question["id"])
+            _record_daily_diagnosis_result(
+                session, question, answer, True, "react_diagnosis_retest"
+            )
+        if right.button("原题仍需复习", key="daily_diagnosis_retest_wrong", width="stretch"):
+            answer = str(session.pop("diagnosis_retest_pending"))
+            _record_daily_diagnosis_result(
+                session, question, answer, False, "react_diagnosis_retest"
+            )
 
 
-def _finish_daily_repair(
-    session: dict[str, Any],
-    user_answer: str,
-    is_correct: bool,
-) -> None:
+def _finish_daily_diagnosis(session: dict[str, Any]) -> None:
     question = session["question"]
-    record_question_bank_attempt(question, user_answer, is_correct, "react_retest")
-    if is_correct:
-        resolve_wrong_question(question["id"])
-    with st.status("噜噜正在整理这次补课记录…", expanded=True) as progress_status:
-        report = finish_repair(
-            state=session["repair"],
-            original_retest_correct=is_correct,
-            progress=progress_status.write,
+    diagnosis = session["diagnosis"]
+    try:
+        with st.spinner("噜噜正在根据这次对话生成本题总结…"):
+            summary = AITutor().generate_question_dialogue_summary(
+                section_title=question["section_title"],
+                question_text=question["question_text"],
+                answer_text=question.get("answer_text") or question.get("answer_choice", ""),
+                dialogue=diagnosis.get("dialogue", []),
+            )
+        summary_id = save_question_dialogue_summary(
+            summary,
+            question.get("question_images", []),
         )
-        progress_status.update(
-            label="知识补全报告已生成",
-            state="complete",
-            expanded=False,
-        )
-    session["report"] = report
-    session["mode"] = "report"
-    session.pop("retest_pending_answer", None)
-    _persist_daily(session, "complete")
-    summary = {
-        "content": f"## {report['title']}\n\n{report['content']}\n\n**下一步建议**\n{report['next_suggestion']}",
-        "mastered": report["content"] if is_correct else "",
-        "mistakes": session["repair"].get("gap", ""),
-        "insight": report["content"],
-        "next_suggestion": report["next_suggestion"],
-        "review_focus": question["section_title"],
-        "rating": "",
-    }
-    session["summary_id"] = save_question_dialogue_summary(
-        summary,
-        question.get("question_images", []),
-    )
+        close_diagnosis(diagnosis, summary)
+        session["diagnosis"] = diagnosis
+        session["report"] = summary
+        session["summary_id"] = summary_id
+        session["mode"] = "diagnosis_report"
+        _persist_daily(session, "complete")
+        st.rerun()
+    except AIServiceError as exc:
+        st.error(str(exc))
 
 
-def _render_daily_report(session: dict[str, Any]) -> None:
+def _render_daily_diagnosis_report(session: dict[str, Any]) -> None:
     report = session.get("report", {})
-    st.markdown("## 本次知识补全报告")
-    _render_react_trace(session.get("repair", {}).get("trace", []))
-    st.markdown(report.get("content", "本次补课已经结束。"))
-    st.markdown(f"**下一步建议：** {report.get('next_suggestion', '继续复习本题所属章节。')}")
+    st.markdown("## 本题错因诊断总结")
+    diagnosis = session.get("diagnosis", {})
+    _render_react_trace(diagnosis.get("trace", []))
+    st.markdown(_chat_markdown(report.get("content", "本次诊断已经结束。")))
     summary_id = session.get("summary_id")
     if summary_id:
         summary = get_summary(int(summary_id))
         if summary:
             favorite = st.toggle(
-                "收藏这份报告",
+                "收藏这份总结",
                 value=bool(summary["favorited"]),
-                key=f"daily_report_favorite_{summary_id}",
+                key=f"daily_diagnosis_favorite_{summary_id}",
             )
             if favorite != bool(summary["favorited"]):
                 set_summary_favorite(int(summary_id), favorite)
                 st.toast("已收藏" if favorite else "已取消收藏")
-    if st.button("返回首页", type="primary", key="daily_report_home"):
-        st.session_state.pop("daily_session", None)
-        st.session_state["app_view"] = "home"
-        st.rerun()
-
-
-def render_daily() -> None:
-    if st.button("← 返回首页", key="daily_back_home"):
+    if st.button("返回每日一题", type="primary", key="daily_diagnosis_report_home"):
         st.session_state.pop("daily_session", None)
         _go_home()
         st.rerun()
 
+
+def render_daily() -> None:
+    _render_back_arrow("home", "daily")
     session = st.session_state.get("daily_session")
     if not session:
         question = choose_daily_question()
@@ -1332,24 +1740,28 @@ def render_daily() -> None:
         _render_daily_initial(session)
     elif mode == "correct":
         _render_daily_correct(session)
-    elif mode == "repair":
-        _render_daily_repair_question(session)
-    elif mode == "original_retest":
-        _render_daily_original_retest(session)
-    elif mode == "report":
-        _render_daily_report(session)
+    elif mode == "wrong":
+        _render_daily_wrong(session)
+    elif mode == "wrong_answer":
+        _render_daily_wrong_answer(session)
+    elif mode == "diagnosis":
+        _render_daily_diagnosis_chat(session)
+    elif mode == "diagnosis_complete":
+        _render_daily_diagnosis_chat(session)
+    elif mode == "diagnosis_support":
+        _render_daily_diagnosis_support(session)
+    elif mode == "diagnosis_retest":
+        _render_daily_diagnosis_retest(session)
+    elif mode == "diagnosis_report":
+        _render_daily_diagnosis_report(session)
 
 
 def render_learning() -> None:
     mode = st.session_state.get("learning_mode", "tree")
+    _render_back_arrow("home" if mode == "tree" else "learning", "learning")
     if mode == "tree":
         _render_topic_tree()
         return
-
-    if st.button("← 返回知识航线"):
-        st.session_state["learning_mode"] = "tree"
-        st.session_state.pop("bank_session", None)
-        st.rerun()
 
     requested = st.session_state.pop("requested_section_id", None)
     session = st.session_state.get("bank_session")
@@ -1433,6 +1845,35 @@ def _markdown_math(text: str) -> str:
     return re.sub(r"\$([^$]+)\$(?=[\u4e00-\u9fff])", r"$\1$ ", text)
 
 
+def _chat_markdown(value: Any) -> str:
+    r"""Normalize common LaTeX delimiters before rendering chat Markdown.
+
+    Streamlit renders math in Markdown with ``$...$`` and ``$$...$$``. Models
+    commonly return the equivalent LaTeX delimiters ``\(...\)`` and
+    ``\[...\]``; without this conversion those delimiters are shown literally.
+    """
+    text = str(value or "")
+    # Responses can contain escaped delimiters when they pass through JSON.
+    text = text.replace(r"\\(", r"\(")
+    text = text.replace(r"\\)", r"\)")
+    text = text.replace(r"\\[", r"\[")
+    text = text.replace(r"\\]", r"\]")
+
+    text = re.sub(
+        r"\\\[(.*?)\\\]",
+        lambda match: f"\n\n$$\n{match.group(1).strip()}\n$$\n\n",
+        text,
+        flags=re.DOTALL,
+    )
+    text = re.sub(
+        r"\\\((.*?)\\\)",
+        lambda match: f"${match.group(1).strip()}$",
+        text,
+        flags=re.DOTALL,
+    )
+    return _markdown_math(text)
+
+
 def _answer_text(question: dict[str, Any], indices: list[int]) -> str:
     return "；".join(question["options"][index] for index in indices)
 
@@ -1451,10 +1892,7 @@ def _question_from_wrong(row: Any) -> dict[str, Any] | None:
 
 
 def render_wrong_book() -> None:
-    if st.button("← 返回首页", key="reefs_back_home"):
-        _go_home()
-        st.rerun()
-
+    _render_back_arrow("home", "wrong")
     _render_ocean_hero(
         "wrong",
         LULU_WRONG_SCENE,
@@ -1512,13 +1950,13 @@ def render_wrong_book() -> None:
                     question_images=question.get("question_images", []),
                     key_prefix="reef_lulu",
                 )
-                if st.button(
-                    "删除这条错题记录",
-                    key=f"reef_delete_bank_{question['id']}",
-                ):
-                    delete_wrong_question(question["id"])
-                    st.toast("已删除这条错题记录")
-                    st.rerun()
+            if st.button(
+                "删除这条错题记录",
+                key=f"reef_delete_bank_{question['id']}",
+            ):
+                delete_wrong_question(question["id"])
+                st.toast("已删除这条错题记录")
+                st.rerun()
             continue
         try:
             topic = get_topic(row["topic_id"]) if row["topic_id"] else None
@@ -1607,10 +2045,7 @@ def render_wrong_book() -> None:
 
 
 def render_favorites() -> None:
-    if st.button("← 返回首页", key="treasures_back_home"):
-        _go_home()
-        st.rerun()
-
+    _render_back_arrow("home", "favorites")
     _render_ocean_hero(
         "favorites",
         LULU_FAVORITES_SCENE,
@@ -1634,4 +2069,4 @@ def render_favorites() -> None:
                 st.rerun()
             for path in json.loads(row["question_images_json"] or "[]"):
                 st.image(str(BASE_DIR / path), width="stretch")
-            st.markdown(row["content"])
+            st.markdown(_chat_markdown(row["content"]))

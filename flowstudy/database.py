@@ -9,7 +9,7 @@ from typing import Any, Iterator
 
 from flowstudy.config import DB_PATH
 from flowstudy.content import concept_for_question, get_concepts, get_topic
-from flowstudy.knowledge_catalog import catalog_nodes
+from flowstudy.knowledge_catalog import catalog_nodes, nodes_for_section
 
 
 @contextmanager
@@ -182,6 +182,7 @@ def init_db() -> None:
                 confidence REAL NOT NULL DEFAULT 0,
                 review_status TEXT NOT NULL DEFAULT 'needs_review',
                 source_question_pages TEXT NOT NULL,
+                source_page_images_json TEXT NOT NULL DEFAULT '[]',
                 source_answer_pages TEXT NOT NULL DEFAULT '',
                 FOREIGN KEY(section_id) REFERENCES question_bank_sections(id),
                 UNIQUE(section_id, question_number)
@@ -260,8 +261,25 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(run_id) REFERENCES react_runs(id)
             );
+
+            CREATE TABLE IF NOT EXISTS agent_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                memory_type TEXT NOT NULL,
+                memory_key TEXT NOT NULL,
+                content TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                source TEXT NOT NULL DEFAULT 'agent',
+                confidence REAL NOT NULL DEFAULT 1.0,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(memory_type, memory_key)
+            );
             """
         )
+
+        _add_column(conn, "react_steps", "duration_ms", "REAL NOT NULL DEFAULT 0")
+        _add_column(conn, "react_steps", "error", "TEXT NOT NULL DEFAULT ''")
 
         for table, fields in {
             "quiz_attempts": {
@@ -290,6 +308,7 @@ def init_db() -> None:
             },
             "question_bank": {
                 "source_question_label": "TEXT NOT NULL DEFAULT ''",
+                "source_page_images_json": "TEXT NOT NULL DEFAULT '[]'",
             },
         }.items():
             for name, definition in fields.items():
@@ -297,6 +316,7 @@ def init_db() -> None:
         _seed_concept_mastery(conn)
         _seed_knowledge_catalog(conn)
         _seed_question_knowledge(conn)
+        _repair_low_confidence_section_tags(conn)
         current_ids = {concept["id"] for concept in get_concepts()}
         placeholders = ",".join("?" for _ in current_ids)
         conn.execute(
@@ -361,6 +381,44 @@ def _seed_question_knowledge(conn: sqlite3.Connection) -> None:
             WHERE section_id = ?
             """,
             (knowledge_id, section["id"]),
+        )
+
+
+def _repair_low_confidence_section_tags(conn: sqlite3.Connection) -> None:
+    """Rebuild classifier fallbacks after section-title rules are corrected."""
+    rows = conn.execute(
+        """
+        SELECT q.id, s.subject, s.chapter_number, s.title
+        FROM question_bank q
+        JOIN question_bank_sections s ON s.id = q.section_id
+        WHERE EXISTS (
+            SELECT 1
+            FROM question_knowledge qk
+            WHERE qk.question_id = q.id
+              AND qk.source = 'section_title_classifier'
+        )
+        """
+    ).fetchall()
+    for row in rows:
+        candidates = nodes_for_section(
+            row["subject"], int(row["chapter_number"]), row["title"]
+        )
+        if not candidates:
+            continue
+        conn.execute(
+            """
+            DELETE FROM question_knowledge
+            WHERE question_id = ? AND source = 'section_title_classifier'
+            """,
+            (row["id"],),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO question_knowledge(
+                question_id, knowledge_id, relation, confidence, source
+            ) VALUES (?, ?, 'direct', 0.45, 'section_title_classifier')
+            """,
+            (row["id"], candidates[0]["id"]),
         )
 
 
@@ -662,7 +720,11 @@ def get_growth_overview() -> dict[str, Any]:
 
 
 def get_weak_concepts(limit: int = 5) -> list[dict[str, Any]]:
-    """Rank weaknesses from mastery, wrong questions and recent performance."""
+    """Rank observed weaknesses from all available learning records.
+
+    Seeded mastery rows are intentionally excluded until a concept has real
+    evidence. A default mastery value is a UI seed, not a weakness signal.
+    """
     concept_catalog = {item["id"]: item for item in get_concepts()}
     with connection() as conn:
         mastery_rows = conn.execute("SELECT * FROM concept_mastery").fetchall()
@@ -694,6 +756,70 @@ def get_weak_concepts(limit: int = 5) -> list[dict[str, Any]]:
             LIMIT 10
             """
         ).fetchall()
+        recent_cutoff = (datetime.now() - timedelta(days=14)).isoformat(
+            timespec="seconds"
+        )
+        knowledge_rows = conn.execute(
+            """
+            WITH attempts AS (
+                SELECT qk.knowledge_id,
+                       COUNT(a.id) AS attempts,
+                       COALESCE(SUM(a.is_correct), 0) AS correct_attempts,
+                       SUM(CASE WHEN a.attempted_at >= ? THEN 1 ELSE 0 END)
+                           AS recent_attempts,
+                       AVG(CASE WHEN a.attempted_at >= ? THEN a.is_correct END)
+                           AS recent_accuracy,
+                       MAX(a.attempted_at) AS last_attempt
+                FROM question_knowledge qk
+                JOIN quiz_attempts a ON a.question_id = qk.question_id
+                WHERE qk.relation IN ('direct', 'prerequisite')
+                   OR (
+                       qk.relation = 'primary'
+                       AND qk.source = 'section_fallback'
+                       AND NOT EXISTS (
+                           SELECT 1
+                           FROM question_knowledge specific
+                           WHERE specific.question_id = qk.question_id
+                             AND specific.relation IN ('direct', 'prerequisite')
+                             AND specific.source != 'section_fallback'
+                       )
+                   )
+                GROUP BY qk.knowledge_id
+            ), wrong AS (
+                SELECT qk.knowledge_id,
+                       SUM(w.wrong_count) AS wrong_count,
+                       MAX(w.last_wrong_at) AS last_wrong
+                FROM question_knowledge qk
+                JOIN wrong_questions w ON w.question_id = qk.question_id
+                WHERE w.resolved = 0
+                  AND (
+                      qk.relation IN ('direct', 'prerequisite')
+                      OR (
+                          qk.relation = 'primary'
+                          AND qk.source = 'section_fallback'
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM question_knowledge specific
+                              WHERE specific.question_id = qk.question_id
+                                AND specific.relation IN ('direct', 'prerequisite')
+                                AND specific.source != 'section_fallback'
+                          )
+                      )
+                  )
+                GROUP BY qk.knowledge_id
+            )
+            SELECT n.id, n.subject, n.title,
+                   a.attempts, a.correct_attempts,
+                   a.recent_attempts, a.recent_accuracy, a.last_attempt,
+                   COALESCE(w.wrong_count, 0) AS wrong_count,
+                   w.last_wrong
+            FROM knowledge_nodes n
+            JOIN attempts a ON a.knowledge_id = n.id
+            LEFT JOIN wrong w ON w.knowledge_id = n.id
+            WHERE n.source IN ('curated', 'section_fallback')
+            """,
+            (recent_cutoff, recent_cutoff),
+        ).fetchall()
 
     evidence: dict[str, dict[str, Any]] = {}
     for row in mastery_rows:
@@ -707,10 +833,35 @@ def get_weak_concepts(limit: int = 5) -> list[dict[str, Any]]:
             "topic": catalog_item["topic"],
             "breadcrumb": catalog_item["breadcrumb"],
             "mastery": float(row["mastery"]),
+            "attempts": int(row["attempts"]),
+            "correct_attempts": int(row["correct_attempts"]),
             "wrong_count": 0,
             "recent_attempts": 0,
             "recent_accuracy": None,
             "last_seen": row["last_studied_at"],
+            "favorite_mentions": 0,
+        }
+
+    for row in knowledge_rows:
+        attempts = int(row["attempts"])
+        correct_attempts = int(row["correct_attempts"])
+        evidence[row["id"]] = {
+            "concept_id": row["id"],
+            "topic_id": row["id"],
+            "concept": row["title"],
+            "topic": row["subject"],
+            "breadcrumb": row["title"],
+            "mastery": correct_attempts / attempts if attempts else 0.0,
+            "attempts": attempts,
+            "correct_attempts": correct_attempts,
+            "wrong_count": int(row["wrong_count"]),
+            "recent_attempts": int(row["recent_attempts"]),
+            "recent_accuracy": (
+                float(row["recent_accuracy"])
+                if row["recent_accuracy"] is not None
+                else None
+            ),
+            "last_seen": row["last_attempt"] or row["last_wrong"],
             "favorite_mentions": 0,
         }
 
@@ -747,17 +898,23 @@ def get_weak_concepts(limit: int = 5) -> list[dict[str, Any]]:
             if item["concept"] and item["concept"] in text:
                 item["favorite_mentions"] += 1
 
+    observed: list[dict[str, Any]] = []
     for item in evidence.values():
+        if (
+            int(item.get("attempts", 0)) == 0
+            and int(item.get("recent_attempts", 0)) == 0
+            and int(item.get("wrong_count", 0)) == 0
+        ):
+            continue
         weakness = (1.0 - item["mastery"]) * 60
         weakness += min(item["wrong_count"] * 8, 24)
         if item["recent_accuracy"] is not None:
             weakness += (1.0 - item["recent_accuracy"]) * 16
-        if item["recent_attempts"] == 0 and item["wrong_count"] == 0:
-            weakness -= 25
         weakness += min(item["favorite_mentions"] * 3, 6)
         item["weakness_score"] = weakness
+        observed.append(item)
     return sorted(
-        evidence.values(),
+        observed,
         key=lambda item: (
             -item["weakness_score"],
             item["mastery"],
@@ -1329,6 +1486,9 @@ def _bank_question(row: sqlite3.Row) -> dict[str, Any]:
     value = dict(row)
     value["question_images"] = json.loads(value.pop("question_images_json"))
     value["answer_images"] = json.loads(value.pop("answer_images_json"))
+    value["source_page_images"] = json.loads(
+        value.pop("source_page_images_json", "[]") or "[]"
+    )
     value["auto_gradable"] = bool(value["auto_gradable"])
     return value
 
@@ -1409,7 +1569,77 @@ def get_question_knowledge(question_id: str) -> list[dict[str, Any]]:
             """,
             (question_id,),
         ).fetchall()
-    return [dict(row) for row in rows]
+        explicit = [dict(row) for row in rows]
+        explicit_ids = {str(item["id"]) for item in explicit}
+        direct = [
+            item
+            for item in explicit
+            if item.get("relation") == "direct"
+            and item.get("tag_source") != "section_fallback"
+        ]
+        frontier = [str(item["id"]) for item in direct]
+        confidence_by_id = {
+            str(item["id"]): float(item.get("tag_confidence") or 0.0)
+            for item in direct
+        }
+        derived: list[dict[str, Any]] = []
+        derived_ids: set[str] = set()
+        while frontier:
+            placeholders = ", ".join("?" for _ in frontier)
+            prerequisite_rows = conn.execute(
+                f"""
+                SELECT kp.knowledge_id, kp.prerequisite_id,
+                       kp.confidence AS prerequisite_confidence,
+                       n.id, n.subject, n.chapter_number, n.phase, n.title,
+                       n.source, n.confidence
+                FROM knowledge_prerequisites kp
+                JOIN knowledge_nodes n ON n.id = kp.prerequisite_id
+                WHERE kp.knowledge_id IN ({placeholders})
+                ORDER BY kp.confidence DESC, n.title
+                """,
+                frontier,
+            ).fetchall()
+            next_frontier: list[str] = []
+            for row in prerequisite_rows:
+                prerequisite_id = str(row["prerequisite_id"])
+                if prerequisite_id in explicit_ids or prerequisite_id in derived_ids:
+                    continue
+                parent_confidence = confidence_by_id.get(
+                    str(row["knowledge_id"]), 0.55
+                )
+                derived_ids.add(prerequisite_id)
+                confidence_by_id[prerequisite_id] = min(
+                    1.0,
+                    parent_confidence
+                    * float(row["prerequisite_confidence"] or 1.0),
+                )
+                derived.append(
+                    {
+                        "id": row["id"],
+                        "subject": row["subject"],
+                        "chapter_number": row["chapter_number"],
+                        "phase": row["phase"],
+                        "title": row["title"],
+                        "source": row["source"],
+                        "confidence": row["confidence"],
+                        "relation": "prerequisite",
+                        "tag_confidence": confidence_by_id[prerequisite_id],
+                        "tag_source": "curated_prerequisite",
+                    }
+                )
+                next_frontier.append(prerequisite_id)
+            frontier = next_frontier
+
+    direct_rows = [item for item in explicit if item.get("relation") == "direct"]
+    prerequisite_rows = [
+        item for item in explicit if item.get("relation") == "prerequisite"
+    ]
+    other_rows = [
+        item
+        for item in explicit
+        if item.get("relation") not in {"direct", "prerequisite"}
+    ]
+    return direct_rows + prerequisite_rows + derived + other_rows
 
 
 def save_question_knowledge(
@@ -1608,6 +1838,131 @@ def choose_repair_questions(
     return [_bank_question(row) for row in rows]
 
 
+def get_knowledge_mastery(knowledge_id: str) -> dict[str, Any]:
+    """Return observed accuracy for questions tagged with one knowledge node."""
+    with connection() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(a.id) AS attempts,
+                   COALESCE(SUM(a.is_correct), 0) AS correct_attempts
+            FROM question_knowledge qk
+            JOIN quiz_attempts a ON a.question_id = qk.question_id
+            WHERE qk.knowledge_id = ?
+              AND qk.relation IN ('direct', 'prerequisite')
+            """,
+            (knowledge_id,),
+        ).fetchone()
+    attempts = int(row["attempts"] if row else 0)
+    correct_attempts = int(row["correct_attempts"] if row else 0)
+    return {
+        "knowledge_id": knowledge_id,
+        "attempts": attempts,
+        "correct_attempts": correct_attempts,
+        "accuracy": correct_attempts / attempts if attempts else 0.0,
+    }
+
+
+def choose_repair_questions_for_knowledge(
+    knowledge_id: str,
+    exclude_ids: list[str] | None = None,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Return fixed-bank questions that directly practice one knowledge node."""
+    excluded = set(exclude_ids or [])
+    excluded_clause = (
+        f"AND q.id NOT IN ({', '.join('?' for _ in excluded)})"
+        if excluded
+        else ""
+    )
+    with connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT q.*, s.title AS section_title, s.phase, s.subject,
+                   s.source, s.source_label,
+                   CASE WHEN EXISTS(
+                       SELECT 1 FROM quiz_attempts a WHERE a.question_id = q.id
+                   ) THEN 1 ELSE 0 END AS seen
+            FROM question_bank q
+            JOIN question_bank_sections s ON s.id = q.section_id
+            JOIN question_knowledge qk ON qk.question_id = q.id
+            WHERE qk.knowledge_id = ?
+              AND qk.relation = 'direct'
+              {excluded_clause}
+            ORDER BY CASE s.phase WHEN 'foundation' THEN 1 ELSE 2 END,
+                     seen, RANDOM()
+            LIMIT ?
+            """,
+            (knowledge_id, *excluded, limit),
+        ).fetchall()
+    return [_bank_question(row) for row in rows]
+
+
+def choose_question_for_knowledge(
+    knowledge_id: str,
+    exclude_ids: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Choose a fixed-bank question that matches one selected knowledge node."""
+    excluded = set(exclude_ids or [])
+    if knowledge_id.startswith("section:"):
+        section_id = knowledge_id.removeprefix("section:")
+        candidates = choose_question_bank_questions(section_id, limit=8)
+        return next(
+            (question for question in candidates if question["id"] not in excluded),
+            None,
+        )
+
+    direct = choose_repair_questions_for_knowledge(
+        knowledge_id,
+        exclude_ids=list(excluded),
+        limit=1,
+    )
+    if direct:
+        return direct[0]
+
+    node = next(
+        (item for item in catalog_nodes() if item["id"] == knowledge_id),
+        None,
+    )
+    if not node:
+        return None
+
+    title_terms = [node["title"], *node["hints"]]
+    title_clause = " OR ".join("s.title LIKE ?" for _ in title_terms)
+    excluded_clause = (
+        f"AND q.id NOT IN ({', '.join('?' for _ in excluded)})"
+        if excluded
+        else ""
+    )
+    params: list[Any] = [
+        node["subject"],
+        node["chapter_number"],
+        *(f"%{term}%" for term in title_terms),
+        *excluded,
+    ]
+    with connection() as conn:
+        row = conn.execute(
+            f"""
+            SELECT q.*, s.title AS section_title, s.phase, s.subject,
+                   s.source, s.source_label
+            FROM question_bank q
+            JOIN question_bank_sections s ON s.id = q.section_id
+            WHERE s.subject = ?
+              AND s.chapter_number = ?
+              AND ({title_clause})
+              {excluded_clause}
+            ORDER BY CASE WHEN EXISTS(
+                         SELECT 1 FROM quiz_attempts a WHERE a.question_id = q.id
+                     ) THEN 1 ELSE 0 END,
+                     RANDOM()
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+    if row:
+        return _bank_question(row)
+    return None
+
+
 def start_daily_session(question_id: str, context: dict[str, Any]) -> int:
     now = datetime.now().isoformat(timespec="seconds")
     with connection() as conn:
@@ -1681,6 +2036,9 @@ def record_react_step(
     tool_name: str,
     tool_input: dict[str, Any],
     tool_output: dict[str, Any],
+    *,
+    duration_ms: float = 0.0,
+    error: str = "",
 ) -> None:
     now = datetime.now().isoformat(timespec="seconds")
     with connection() as conn:
@@ -1688,8 +2046,9 @@ def record_react_step(
             """
             INSERT INTO react_steps(
                 run_id, step_number, action, observation_json,
-                tool_name, tool_input_json, tool_output_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                tool_name, tool_input_json, tool_output_json, created_at,
+                duration_ms, error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -1700,12 +2059,80 @@ def record_react_step(
                 json.dumps(tool_input, ensure_ascii=False),
                 json.dumps(tool_output, ensure_ascii=False),
                 now,
+                float(duration_ms),
+                error,
             ),
         )
         conn.execute(
             "UPDATE react_runs SET step_count = ? WHERE id = ?",
             (step_number, run_id),
         )
+
+
+def save_agent_memory(
+    memory_type: str,
+    memory_key: str,
+    content: str,
+    *,
+    metadata: dict[str, Any] | None = None,
+    source: str = "agent",
+    confidence: float = 1.0,
+) -> None:
+    """Upsert one concise, user-facing learning memory."""
+    now = datetime.now().isoformat(timespec="seconds")
+    with connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_memories(
+                memory_type, memory_key, content, metadata_json,
+                source, confidence, active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(memory_type, memory_key) DO UPDATE SET
+                content = excluded.content,
+                metadata_json = excluded.metadata_json,
+                source = excluded.source,
+                confidence = excluded.confidence,
+                active = 1,
+                updated_at = excluded.updated_at
+            """,
+            (
+                memory_type,
+                memory_key,
+                content.strip(),
+                json.dumps(metadata or {}, ensure_ascii=False),
+                source,
+                max(0.0, min(1.0, float(confidence))),
+                now,
+                now,
+            ),
+        )
+
+
+def get_agent_memories(limit: int = 20) -> list[dict[str, Any]]:
+    with connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM agent_memories
+            WHERE active = 1
+            ORDER BY updated_at DESC, id DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        ).fetchall()
+    return [
+        {
+            **dict(row),
+            "metadata": json.loads(row["metadata_json"] or "{}"),
+        }
+        for row in rows
+    ]
+
+
+def clear_agent_memories() -> None:
+    with connection() as conn:
+        conn.execute("UPDATE agent_memories SET active = 0, updated_at = ?", (
+            datetime.now().isoformat(timespec="seconds"),
+        ))
 
 
 def finish_react_run(

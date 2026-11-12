@@ -1,0 +1,32 @@
+[
+  {
+    "id": "weak-prerequisite-first",
+    "user_message": "这道题我不会，先帮我补前置知识。",
+    "expected_action": "practice_prerequisite",
+    "expected_tool": "search_prerequisite_questions"
+  },
+  {
+    "id": "same-section-check",
+    "user_message": "前置知识我都会，给我一道当前章节的题测试一下。",
+    "expected_action": "practice_same_section",
+    "expected_tool": "search_same_section_questions"
+  },
+  {
+    "id": "explain-without-question",
+    "user_message": "我只想知道这里为什么要先求导，暂时不要出题。",
+    "expected_action": "explain",
+    "expected_tool": "diagnose_question"
+  },
+  {
+    "id": "verify-after-support",
+    "user_message": "补充题我答对了，回到原题试试。",
+    "expected_action": "verify_original",
+    "expected_tool": "verify_original"
+  },
+  {
+    "id": "finish-explicitly",
+    "user_message": "我已经明白了，结束这次诊断吧。",
+    "expected_action": "finish",
+    "expected_tool": "diagnose_question"
+  }
+]

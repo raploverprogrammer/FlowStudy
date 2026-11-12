@@ -255,6 +255,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
             confidence REAL NOT NULL DEFAULT 0,
             review_status TEXT NOT NULL DEFAULT 'needs_review',
             source_question_pages TEXT NOT NULL,
+            source_page_images_json TEXT NOT NULL DEFAULT '[]',
             source_answer_pages TEXT NOT NULL DEFAULT '',
             FOREIGN KEY(section_id) REFERENCES question_bank_sections(id),
             UNIQUE(section_id, question_number)
@@ -337,6 +338,24 @@ def save_crop(
     return path.relative_to(ROOT).as_posix()
 
 
+def source_page_path(section: Section, page_number: int) -> Path:
+    directory = ASSET_ROOT / section.id / "source_pages"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"page-{page_number:03d}.webp"
+
+
+def save_source_page(
+    image: Image.Image,
+    section: Section,
+    page_number: int,
+) -> str:
+    """Persist the complete rendered source page without a question crop."""
+    path = source_page_path(section, page_number)
+    if not path.exists():
+        image.save(path, "WEBP", quality=96, method=6)
+    return path.relative_to(ROOT).as_posix()
+
+
 def extract_questions(
     document: fitz.Document,
     section: Section,
@@ -350,6 +369,7 @@ def extract_questions(
         # OCR scale. A 3x render reliably preserves their small leading number
         # and also produces a crisp source crop for the learning interface.
         image, lines = ocr_page(document, page_number, engine, scale=3.0)
+        source_page = save_source_page(image, section, page_number)
         body_top = int(image.height * 0.12)
         body_bottom = int(image.height * 0.94)
         raw_starts = [
@@ -389,6 +409,7 @@ def extract_questions(
         if not starts:
             if active_number is not None:
                 record = questions[active_number]
+                record.setdefault("source_page_images", []).append(source_page)
                 path = crop_path(
                     section, "questions", active_number, len(record["images"]) + 1
                 )
@@ -407,6 +428,7 @@ def extract_questions(
         first_y = max(body_top, int(starts[0][1].y) - 14)
         if active_number is not None and first_y > body_top + 30:
             record = questions[active_number]
+            record.setdefault("source_page_images", []).append(source_page)
             path = crop_path(
                 section, "questions", active_number, len(record["images"]) + 1
             )
@@ -433,8 +455,15 @@ def extract_questions(
             active_number = number
             record = questions.setdefault(
                 number,
-                {"images": [], "pages": [], "text": [], "confidence": []},
+                {
+                    "images": [],
+                    "pages": [],
+                    "source_page_images": [],
+                    "text": [],
+                    "confidence": [],
+                },
             )
+            record["source_page_images"].append(source_page)
             path = crop_path(
                 section, "questions", number, len(record["images"]) + 1
             )
@@ -696,8 +725,9 @@ def import_section(
                 question_text, question_images_json,
                 answer_text, answer_choice, answer_images_json,
                 auto_gradable, confidence, review_status,
-                source_question_pages, source_answer_pages
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_question_pages, source_page_images_json,
+                source_answer_pages
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 f"{section.id}-q{number:03d}",
@@ -716,6 +746,10 @@ def import_section(
                 confidence,
                 review_status,
                 ",".join(map(str, sorted(set(question["pages"])))),
+                json.dumps(
+                    list(dict.fromkeys(question.get("source_page_images", []))),
+                    ensure_ascii=False,
+                ),
                 ",".join(
                     map(str, sorted(set(answer.get("pages", []))))
                     if answer else []

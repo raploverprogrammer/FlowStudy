@@ -216,6 +216,13 @@ def nodes_for_section(
             "integral-inequality",
             "integral-physics",
         )),
+        ("一元函数积分学的应用", (
+            "single-integral-concept",
+            "single-integral-calculation",
+            "integral-geometry",
+            "integral-inequality",
+            "integral-physics",
+        )),
         ("一元函数微分学及其应用", (
             "derivative-definition",
             "derivative-calculation",
@@ -223,7 +230,18 @@ def nodes_for_section(
             "monotonic-extreme",
             "convexity-asymptote",
         )),
+        ("一元函数微分学的应用", (
+            "derivative-definition",
+            "derivative-calculation",
+            "mean-value-theorem",
+            "monotonic-extreme",
+            "convexity-asymptote",
+        )),
         ("多元函数微分学及其应用", (
+            "multivariable-derivative",
+            "multivariable-extreme",
+        )),
+        ("多元函数微分学的应用", (
             "multivariable-derivative",
             "multivariable-extreme",
         )),
